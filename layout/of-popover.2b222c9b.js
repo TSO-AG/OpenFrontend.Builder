@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunk=self.webpackChunk||[]).push([[4960],{32095:(e,t,n)=>{n.r(t),n.d(t,{default:()=>s.AM,initMultiple:()=>u});var s=n(89336);function u(e){for(const t of e)s.AM.getOrCreateInstance(t)}}}]);
