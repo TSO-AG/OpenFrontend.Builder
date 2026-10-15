@@ -68,13 +68,13 @@
                                 <option value="">Keine Vorlage ausgewählt</option>
                             </select>
                         </label>
-                        <button type="button" data-builder-load-template disabled>Vorlage laden</button>
                         <div class="builder-panel__actions builder-template-actions">
+                            <button type="button" data-builder-load-template disabled>Vorlage laden</button>
+                            <button type="button" data-builder-delete-template disabled>Vorlage löschen</button>
                             <button type="button" data-builder-save>Vorlage speichern</button>
-                            <button type="button" data-builder-delete disabled>Löschen</button>
-                            <button type="button" data-builder-reset-template-colors disabled>Farben auf Standard zurücksetzen</button>
-                            <button type="button" data-builder-reset-draft>Entwurf zurücksetzen</button>
-                            <button type="button" data-builder-export>SCSS herunterladen</button>
+                            <button type="button" data-builder-export-template disabled>Vorlage exportieren</button>
+                            <button type="button" data-builder-import-template>Vorlage importieren</button>
+                            <input type="file" data-builder-import-file accept=".json,application/json" hidden>
                         </div>
         <section id="builder-setup-section" class="builder-section builder-section--setup" data-builder-section="setup" aria-labelledby="builder-setup-title">
             <h2 id="builder-setup-title">Setup</h2>

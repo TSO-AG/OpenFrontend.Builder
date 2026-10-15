@@ -551,11 +551,11 @@
   var templateName = panel.querySelector('[data-builder-template-name]');
   var templateSelect = panel.querySelector('[data-builder-template]');
   var loadTemplateButton = panel.querySelector('[data-builder-load-template]');
+  var deleteTemplateButton = panel.querySelector('[data-builder-delete-template]');
   var saveTemplateButton = panel.querySelector('[data-builder-save]');
-  var deleteTemplateButton = panel.querySelector('[data-builder-delete]');
-  var resetTemplateColorsButton = panel.querySelector('[data-builder-reset-template-colors]');
-  var resetDraftButton = panel.querySelector('[data-builder-reset-draft]');
-  var exportButton = panel.querySelector('[data-builder-export]');
+  var exportTemplateButton = panel.querySelector('[data-builder-export-template]');
+  var importTemplateButton = panel.querySelector('[data-builder-import-template]');
+  var importFileInput = panel.querySelector('[data-builder-import-file]');
   var colorVariables = [
     'primary', 'secondary', 'success', 'danger', 'warning', 'info', 'light', 'dark',
     'background', 'text', 'heading',
@@ -590,8 +590,12 @@
   });
   var activeTheme = themeSelect ? themeSelect.value : 'standard';
   var activeTemplateName = '';
-  var storageKey = 'openfrontend-builder-templates';
-  var draftStorageKey = 'openfrontend-builder-draft';
+  var storageKey = 'openfrontend-builder';
+  var legacyTemplatesKey = 'openfrontend-builder-templates';
+  var legacyDraftKey = 'openfrontend-builder-draft';
+  var templateExportFormat = 'openfrontend-builder-template';
+  var templateExportVersion = 1;
+  var maxImportFileSize = 1024 * 1024;
   var templates = {};
 
   function showBuilderSection(sectionName) {
@@ -713,8 +717,6 @@
     applyVariable(variable, fontValue);
     saveActivePreset();
     presets[activeTheme][variable] = fontValue;
-    writeDraft();
-    saveCurrentTemplate();
     setStatus('Google-Schriftart wird geladen: ' + family);
   }
 
@@ -917,88 +919,100 @@
     applyVariable(variable, value);
     syncPaletteReferences(variable);
     saveActivePreset();
-    writeDraft();
-    saveCurrentTemplate();
 
     setStatus('Änderungen werden live angezeigt.');
   }
 
-  function readTemplates() {
+  var storage = (function () {
     try {
-      var stored = window.localStorage.getItem(storageKey);
-      templates = stored ? JSON.parse(stored) : {};
+      var candidate = window.localStorage;
+      var testKey = '__openfrontend-builder-test__';
+      candidate.setItem(testKey, testKey);
+      candidate.removeItem(testKey);
+      return candidate;
     } catch (error) {
-      templates = {};
-      setStatus('Vorlagen konnten nicht geladen werden.', true);
+      return null;
     }
-  }
+  }());
 
-  function writeTemplates() {
+  function writeState() {
+    if (!storage) {
+      setStatus('Der Browser-Speicher (localStorage) steht nicht zur Verfügung.', true);
+      return false;
+    }
+
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(templates));
+      storage.setItem(storageKey, JSON.stringify({
+        templates: templates,
+        activeTemplateName: activeTemplateName
+      }));
       return true;
     } catch (error) {
-      setStatus('Vorlage konnte nicht gespeichert werden.', true);
+      setStatus('Die Vorlage konnte nicht im Browser-Speicher gespeichert werden.', true);
       return false;
     }
   }
 
-  function writeDraft() {
+  function readState() {
+    if (!storage) {
+      return null;
+    }
+
     try {
-      window.localStorage.setItem(draftStorageKey, JSON.stringify({
-        activeTheme: activeTheme,
-        activeTemplateName: activeTemplateName,
-        presets: clonePresets(presets)
-      }));
+      var stored = storage.getItem(storageKey);
+
+      if (stored) {
+        return JSON.parse(stored);
+      }
+
+      var legacyTemplates = storage.getItem(legacyTemplatesKey);
+      var legacyDraft = storage.getItem(legacyDraftKey);
+
+      if (!legacyTemplates && !legacyDraft) {
+        return null;
+      }
+
+      var draft = legacyDraft ? JSON.parse(legacyDraft) : {};
+
+      return {
+        templates: legacyTemplates ? JSON.parse(legacyTemplates) : {},
+        activeTemplateName: draft.activeTemplateName || '',
+        activeTheme: draft.activeTheme || activeTheme,
+        presets: draft.presets || null,
+        migrated: true
+      };
     } catch (error) {
-      setStatus('Aktuelle Änderungen konnten nicht zwischengespeichert werden.', true);
+      setStatus('Die gespeicherten Vorlagen konnten nicht gelesen werden.', true);
+      return null;
     }
   }
 
-  function readDraft() {
-    try {
-      var stored = window.localStorage.getItem(draftStorageKey);
-      var draft = stored ? JSON.parse(stored) : null;
+  function restoreState() {
+    var state = readState();
 
-      if (!draft || !draft.presets) {
-        return;
-      }
-
-      presets = clonePresets(draft.presets);
-      activeTheme = presets[draft.activeTheme] ? draft.activeTheme : activeTheme;
-      ensureVariantPreset(activeTheme);
-      activeTemplateName = draft.activeTemplateName || '';
-      if (!templates[activeTemplateName]) {
-        activeTemplateName = '';
-      }
-      if (templateName) {
-        templateName.value = activeTemplateName;
-      }
-      if (themeSelect) {
-        themeSelect.value = activeTheme;
-      }
-      setTheme(activeTheme);
-      loadPreset(activeTheme);
-      refreshTemplateOptions(activeTemplateName);
+    if (!state) {
+      refreshTemplateOptions();
       updateEditorVisibility();
-    } catch (error) {
-      setStatus('Aktuelle Änderungen konnten nicht wiederhergestellt werden.', true);
-    }
-  }
-
-  function resetDraft() {
-    if (!window.confirm('Soll der aktuelle Entwurf wirklich zurückgesetzt werden?')) {
       return;
     }
 
-    window.localStorage.removeItem(draftStorageKey);
-    activeTemplateName = '';
-    if (templateName) {
-      templateName.value = '';
-    }
-    presets = createPresets();
-    activeTheme = 'standard';
+    templates = state.templates && typeof state.templates === 'object' ? state.templates : {};
 
+    activeTemplateName = templates[state.activeTemplateName] &&
+      templates[state.activeTemplateName].presets
+      ? state.activeTemplateName
+      : '';
+
+    if (activeTemplateName) {
+      var activeTemplate = templates[activeTemplateName];
+      presets = clonePresets(activeTemplate.presets);
+      activeTheme = presets[activeTemplate.activeTheme] ? activeTemplate.activeTheme : 'standard';
+      ensureVariantPreset(activeTheme);
+    }
+
+    if (templateName) {
+      templateName.value = activeTemplateName;
+    }
     if (themeSelect) {
       themeSelect.value = activeTheme;
     }
@@ -1008,9 +1022,13 @@
 
     setTheme(activeTheme);
     loadPreset(activeTheme);
-    refreshTemplateOptions();
+    refreshTemplateOptions(activeTemplateName);
     updateEditorVisibility();
-    setStatus('Der aktuelle Entwurf wurde zurückgesetzt.');
+
+    if (state.migrated && writeState()) {
+      storage.removeItem(legacyTemplatesKey);
+      storage.removeItem(legacyDraftKey);
+    }
   }
 
   function refreshTemplateOptions(selectedName) {
@@ -1030,109 +1048,21 @@
     });
 
     templateSelect.value = selectedName || '';
-    if (deleteTemplateButton) {
-      deleteTemplateButton.disabled = !templateSelect.value;
-    }
+    updateTemplateButtonState();
+  }
+
+  function updateTemplateButtonState() {
+    var hasSelection = Boolean(templateSelect && templateSelect.value);
+
     if (loadTemplateButton) {
-      loadTemplateButton.disabled = !templateSelect.value;
+      loadTemplateButton.disabled = !hasSelection;
     }
-    if (resetTemplateColorsButton) {
-      resetTemplateColorsButton.disabled = !activeTemplateName || !templates[activeTemplateName];
+    if (deleteTemplateButton) {
+      deleteTemplateButton.disabled = !hasSelection;
     }
-  }
-
-  function resetTemplateColors() {
-    if (!activeTemplateName || !templates[activeTemplateName]) {
-      return;
+    if (exportTemplateButton) {
+      exportTemplateButton.disabled = !hasSelection;
     }
-
-    if (!window.confirm('Sollen alle Farben dieser Vorlage auf den Standard zurückgesetzt werden?')) {
-      return;
-    }
-
-    colorVariables.forEach(function (variable) {
-      var value = defaults[variable];
-      if (value === undefined) {
-        return;
-      }
-
-      var field = panel.querySelector('[data-builder-variable="' + variable + '"]');
-      if (field) {
-        setInputValue(field, value);
-      }
-      applyVariable(variable, value);
-    });
-
-    panel.querySelectorAll('[data-builder-color-source]').forEach(function (source) {
-      source.value = '';
-    });
-    function resetPaletteSource(variable, sourceVariable) {
-      var source = panel.querySelector('[data-builder-color-source="' + variable + '"]');
-      if (source) {
-        source.value = sourceVariable || '';
-      }
-      if (sourceVariable) {
-        applyPaletteSource(variable, sourceVariable);
-      }
-    }
-    buttonColorDefinitions.forEach(function (definition) {
-      ['text', 'background', 'border'].forEach(function (property) {
-        resetPaletteSource(
-          definition.prefix + '-' + definition.state + '-' + property + '-color',
-          definition[property] === 'underline' || definition[property] === 'transparent'
-            ? ''
-            : definition[property]
-        );
-      });
-    });
-    resetPaletteSource('input-text-color', formColorDefinition.text);
-    resetPaletteSource('input-background-color', formColorDefinition.background);
-    resetPaletteSource('input-border-color', formColorDefinition.border);
-    accordionColorDefinitions.forEach(function (definition) {
-      ['text', 'background', 'border'].forEach(function (property) {
-        resetPaletteSource(
-          definition.prefix + '-' + property + '-color',
-          definition[property] || ''
-        );
-      });
-    });
-    tabsColorDefinitions.forEach(function (definition) {
-      ['text', 'background', 'border'].forEach(function (property) {
-        resetPaletteSource(
-          definition.prefix + '-' + property + '-color',
-          definition[property] || ''
-        );
-      });
-    });
-
-    if (colorPicker) {
-      colorPicker.value = defaults.background;
-    }
-    headerColorPickers.forEach(function (picker) {
-      var variable = picker.dataset.builderHeaderColorPicker;
-      if (defaults[variable] !== undefined) {
-        picker.value = defaults[variable];
-      }
-    });
-
-    saveActivePreset();
-    writeDraft();
-    saveCurrentTemplate();
-    setStatus('Alle Farben wurden auf den Standard zurückgesetzt.');
-  }
-
-  function saveCurrentTemplate() {
-    if (!activeTemplateName || !templates[activeTemplateName]) {
-      return;
-    }
-
-    templates[activeTemplateName] = {
-      activeTheme: activeTheme,
-      presets: clonePresets(presets)
-    };
-    writeTemplates();
-    refreshTemplateOptions(activeTemplateName);
-    updateEditorVisibility();
   }
 
   function saveTemplate() {
@@ -1153,7 +1083,7 @@
     };
     activeTemplateName = name;
 
-    if (writeTemplates()) {
+    if (writeState()) {
       refreshTemplateOptions(name);
       updateEditorVisibility();
       setStatus('Vorlage „' + name + '“ wurde gespeichert.');
@@ -1178,564 +1108,203 @@
     if (templateName) {
       templateName.value = name;
     }
-    writeDraft();
+    writeState();
     refreshTemplateOptions(name);
     updateEditorVisibility();
     setStatus('Vorlage „' + name + '“ wurde geladen.');
   }
 
-  function deleteTemplate() {
-    var name = templateSelect ? templateSelect.value : '';
+  function deleteTemplate(name) {
+    var template = templates[name];
 
-    if (!name || !templates[name]) {
+    if (!template || !window.confirm('Vorlage „' + name + '“ wirklich löschen?')) {
       return;
     }
 
+    var previousActiveTemplateName = activeTemplateName;
     delete templates[name];
+
     if (activeTemplateName === name) {
       activeTemplateName = '';
     }
-    if (writeTemplates()) {
-      templateName.value = '';
-      refreshTemplateOptions();
-      updateEditorVisibility();
-      setStatus('Vorlage „' + name + '“ wurde gelöscht.');
-    }
-  }
 
-  function formatScssValue(variable, value) {
-    if (variable.indexOf('font-size') !== -1) {
-      return value + 'rem';
-    }
-
-    if (variable === 'surface-shadow') {
-      return getShadowValue(value);
-    }
-
-    return value;
-  }
-
-  function createScssExport() {
-    var lines = [
-      '// Generated by the OpenFrontend Design-Builder.',
-      '// Edit this file to apply the design to another project.',
-      ''
-    ];
-    function resolveExportColor(preset, variable) {
-      var value = preset[variable];
-      if (value === undefined || value === '') {
-        return 'transparent';
-      }
-      if (paletteOptions.some(function (option) {
-        return option[1] === value;
-      })) {
-        return preset[value] || 'transparent';
-      }
-      return value;
-    }
-
-    Object.keys(presets).forEach(function (theme) {
-      var preset = Object.assign({}, defaults, presets[theme]);
-      lines.push('$builder-' + theme + '-primary: ' + formatScssValue('primary', preset.primary) + ';');
-      lines.push('$builder-' + theme + '-secondary: ' + formatScssValue('secondary', preset.secondary) + ';');
-      lines.push('$builder-' + theme + '-background: ' + formatScssValue('background', preset.background) + ';');
-      lines.push('$builder-' + theme + '-text: ' + formatScssValue('text', preset.text) + ';');
-      lines.push('$builder-' + theme + '-heading: ' + formatScssValue('heading', preset.heading) + ';');
-      lines.push('$builder-' + theme + '-body-font-size: ' + formatScssValue('body-font-size', preset['body-font-size']) + ';');
-      lines.push('$builder-' + theme + '-heading-font-size: ' + formatScssValue('heading-font-size', preset['heading-font-size']) + ';');
-      lines.push('$builder-' + theme + '-body-line-height: ' + formatScssValue('body-line-height', preset['body-line-height']) + ';');
-      lines.push('$builder-' + theme + '-heading-font-family: ' + preset['heading-font-family'] + ';');
-      lines.push('$builder-' + theme + '-body-font-family: ' + preset['body-font-family'] + ';');
-      lines.push('$builder-' + theme + '-heading-h1-size: ' + preset['heading-h1-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h2-size: ' + preset['heading-h2-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h3-size: ' + preset['heading-h3-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h4-size: ' + preset['heading-h4-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h5-size: ' + preset['heading-h5-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h6-size: ' + preset['heading-h6-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-heading-h1-color: ' + preset['heading-h1-color'] + ';');
-      lines.push('$builder-' + theme + '-heading-h2-color: ' + preset['heading-h2-color'] + ';');
-      lines.push('$builder-' + theme + '-heading-h3-color: ' + preset['heading-h3-color'] + ';');
-      lines.push('$builder-' + theme + '-heading-h4-color: ' + preset['heading-h4-color'] + ';');
-      lines.push('$builder-' + theme + '-heading-h5-color: ' + preset['heading-h5-color'] + ';');
-      lines.push('$builder-' + theme + '-heading-h6-color: ' + preset['heading-h6-color'] + ';');
-      lines.push('$builder-' + theme + '-subheadline-color: ' + preset['subheadline-color'] + ';');
-      buttonColorDefinitions.forEach(function (definition) {
-        ['text', 'background', 'border'].forEach(function (property) {
-          var variable = definition.prefix + '-' + definition.state + '-' + property + '-color';
-          lines.push('$builder-' + theme + '-' + variable + ': ' + resolveExportColor(preset, variable) + ';');
-        });
-      });
-      lines.push('$builder-' + theme + '-input-text-color: ' + preset['input-text-color'] + ';');
-      lines.push('$builder-' + theme + '-input-background-color: ' + preset['input-background-color'] + ';');
-      lines.push('$builder-' + theme + '-input-border-color: ' + preset['input-border-color'] + ';');
-      accordionColorDefinitions.forEach(function (definition) {
-        ['text', 'background', 'border'].forEach(function (property) {
-          var variable = definition.prefix + '-' + property + '-color';
-          lines.push('$builder-' + theme + '-' + variable + ': ' + resolveExportColor(preset, variable) + ';');
-        });
-      });
-      tabsColorDefinitions.forEach(function (definition) {
-        ['text', 'background', 'border'].forEach(function (property) {
-          var variable = definition.prefix + '-' + property + '-color';
-          lines.push('$builder-' + theme + '-' + variable + ': ' + resolveExportColor(preset, variable) + ';');
-        });
-      });
-      lines.push('$builder-' + theme + '-header-background: ' + preset['header-background'] + ';');
-      lines.push('$builder-' + theme + '-header-menu-background: ' + preset['header-menu-background'] + ';');
-      lines.push('$builder-' + theme + '-navigation-font-size: ' + preset['navigation-font-size'] + 'rem;');
-      lines.push('$builder-' + theme + '-footer-column-1: ' + preset['footer-column-1'] + ';');
-      lines.push('$builder-' + theme + '-footer-column-2: ' + preset['footer-column-2'] + ';');
-      lines.push('$builder-' + theme + '-footer-column-3: ' + preset['footer-column-3'] + ';');
-      lines.push('$builder-' + theme + '-footer-column-4: ' + preset['footer-column-4'] + ';');
-      lines.push('$builder-' + theme + '-footer-background: ' + preset['footer-background'] + ';');
-      lines.push('$builder-' + theme + '-footer-text-color: ' + preset['footer-text-color'] + ';');
-      lines.push('$builder-' + theme + '-footer-font-size-desktop: ' + preset['footer-font-size-desktop'] + 'px;');
-      lines.push('$builder-' + theme + '-footer-font-size-mobile: ' + preset['footer-font-size-mobile'] + 'px;');
-      lines.push('$builder-' + theme + '-link-color: ' + preset['link-color'] + ';');
-      lines.push('$builder-' + theme + '-link-hover-color: ' + preset['link-hover-color'] + ';');
-      lines.push('$builder-' + theme + '-button-shape: ' + preset['button-shape'] + ';');
-      lines.push('$builder-' + theme + '-input-border-color: ' + preset['input-border-color'] + ';');
-      lines.push('$builder-' + theme + '-input-focus-color: ' + preset['input-focus-color'] + ';');
-      lines.push('$builder-' + theme + '-surface-color: ' + preset['surface-color'] + ';');
-      lines.push('$builder-' + theme + '-surface-shadow: ' + formatScssValue('surface-shadow', preset['surface-shadow']) + ';');
-      lines.push('$builder-' + theme + '-image-shape: ' + preset['image-shape'] + ';');
-      lines.push('$builder-' + theme + '-input-shape: ' + preset['input-shape'] + ';');
-      lines.push('$builder-' + theme + '-table-style: ' + preset['table-style'] + ';');
-      lines.push('$builder-' + theme + '-accordion-style: ' + preset['accordion-style'] + ';');
-      lines.push('$builder-' + theme + '-tabs-style: ' + preset['tabs-style'] + ';');
-      lines.push('$builder-' + theme + '-teaser-style: ' + preset['teaser-style'] + ';');
-      lines.push('$builder-' + theme + '-teaser-shape: ' + preset['teaser-shape'] + ';');
-      teaserColorDefinitions.forEach(function (definition) {
-        ['text', 'background', 'border'].forEach(function (property) {
-          var variable = definition.prefix + '-' + property + '-color';
-          lines.push('$builder-' + theme + '-' + variable + ': ' + preset[variable] + ';');
-        });
-      });
-      lines.push('');
-    });
-
-    lines.push('/* ----------------------------------------------------------------');
-    lines.push('  custom.scss-compatible wrapper overrides');
-    lines.push('  Copy this section into the project custom.scss.');
-    lines.push('-----------------------------------------------------------------*/');
-    lines.push('');
-
-    Object.keys(presets).forEach(function (theme) {
-      var preset = Object.assign({}, defaults, presets[theme]);
-      var wrapperSelector = theme === 'standard' ? '.wrapper' : '.wrapper-bg-' + theme;
-      lines.push(wrapperSelector + ' {');
-      lines.push('  --bs-primary: ' + preset.primary + ';');
-      lines.push('  --bs-secondary: ' + preset.secondary + ';');
-      lines.push('  --bs-success: ' + preset.success + ';');
-      lines.push('  --bs-danger: ' + preset.danger + ';');
-      lines.push('  --bs-warning: ' + preset.warning + ';');
-      lines.push('  --bs-info: ' + preset.info + ';');
-      lines.push('  --bs-light: ' + preset.light + ';');
-      lines.push('  --bs-dark: ' + preset.dark + ';');
-      lines.push('  --bs-wrapper-bg-color: ' + preset.background + ';');
-      lines.push('  --bs-wrapper-color: ' + preset.text + ';');
-      lines.push('  --bs-body-color: ' + preset.text + ';');
-      lines.push('  --bs-heading-color: ' + preset.heading + ';');
-      lines.push('  --bs-link-color: ' + preset['link-color'] + ';');
-      lines.push('  --bs-link-hover-color: ' + preset['link-hover-color'] + ';');
-      lines.push('  --bs-body-font-family: ' + preset['body-font-family'] + ';');
-      lines.push('  --bs-heading-font-family: ' + preset['heading-font-family'] + ';');
-      lines.push('  --bs-body-font-size: ' + preset['body-font-size'] + 'rem;');
-      lines.push('}');
-      lines.push('');
-      ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach(function (heading) {
-        lines.push(wrapperSelector + ' ' + heading + ' {');
-        lines.push('  color: ' + preset['heading-' + heading + '-color'] + ';');
-        lines.push('  font-size: ' + preset['heading-' + heading + '-size'] + 'rem;');
-        lines.push('}');
-      });
-      lines.push('');
-      lines.push(wrapperSelector + ' .subheadline,');
-      lines.push(wrapperSelector + ' .item-info-subheadline {');
-      lines.push('  color: ' + preset['subheadline-color'] + ';');
-      lines.push('}');
-      lines.push('');
-
-      buttonColorDefinitions.forEach(function (definition) {
-        var selector;
-        if (definition.prefix === 'link') {
-          selector = wrapperSelector + ' a:not(.btn)';
-        } else {
-          selector = wrapperSelector + ' .btn-' + definition.prefix.replace('button-', '');
-        }
-        if (definition.state === 'hover') {
-          selector += ':hover';
-        }
-        lines.push(selector + ' {');
-        lines.push('  color: ' + resolveExportColor(preset, definition.prefix + '-' + definition.state + '-text-color') + ';');
-        lines.push('  background-color: ' + resolveExportColor(preset, definition.prefix + '-' + definition.state + '-background-color') + ';');
-        if (definition.prefix === 'link') {
-          var textDecoration = resolveExportColor(
-            preset,
-            definition.prefix + '-' + definition.state + '-border-color'
-          );
-          lines.push('  text-decoration: ' + (textDecoration === 'transparent' ? 'none' : textDecoration) + ';');
-        } else {
-          lines.push('  border-color: ' + resolveExportColor(preset, definition.prefix + '-' + definition.state + '-border-color') + ';');
-        }
-        lines.push('}');
-        lines.push('');
-      });
-
-      lines.push(wrapperSelector + ' input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),');
-      lines.push(wrapperSelector + ' select,');
-      lines.push(wrapperSelector + ' textarea {');
-      lines.push('  color: ' + resolveExportColor(preset, 'input-text-color') + ';');
-      lines.push('  background-color: ' + resolveExportColor(preset, 'input-background-color') + ';');
-      lines.push('  border-color: ' + resolveExportColor(preset, 'input-border-color') + ';');
-      lines.push('}');
-      lines.push('');
-      lines.push(wrapperSelector + ' .accordion .accordion-button {');
-      lines.push('  color: ' + resolveExportColor(preset, 'accordion-title-text-color') + ';');
-      lines.push('  background-color: ' + resolveExportColor(preset, 'accordion-title-background-color') + ';');
-      lines.push('  border-color: ' + resolveExportColor(preset, 'accordion-title-border-color') + ';');
-      lines.push('}');
-      lines.push(wrapperSelector + ' .accordion .accordion-body {');
-      lines.push('  color: ' + resolveExportColor(preset, 'accordion-text-text-color') + ';');
-      lines.push('  background-color: ' + resolveExportColor(preset, 'accordion-text-background-color') + ';');
-      lines.push('  border-color: ' + resolveExportColor(preset, 'accordion-text-border-color') + ';');
-      lines.push('}');
-      lines.push('');
-      lines.push(wrapperSelector + ' .nav-tabs .nav-link.active {');
-      lines.push('  color: ' + resolveExportColor(preset, 'tabs-active-text-color') + ';');
-      lines.push('  background-color: ' + resolveExportColor(preset, 'tabs-active-background-color') + ';');
-      lines.push('  border-color: ' + resolveExportColor(preset, 'tabs-active-border-color') + ';');
-      lines.push('}');
-      lines.push(wrapperSelector + ' .nav-tabs .nav-link:not(.active) {');
-      lines.push('  color: ' + resolveExportColor(preset, 'tabs-inactive-text-color') + ';');
-      lines.push('  background-color: ' + resolveExportColor(preset, 'tabs-inactive-background-color') + ';');
-      lines.push('  border-color: ' + resolveExportColor(preset, 'tabs-inactive-border-color') + ';');
-      lines.push('}');
-      lines.push('');
-      lines.push(wrapperSelector + ' .object-teaser .wrapper:not(.compact-view) {');
-      lines.push('  color: ' + preset['teaser-standard-text-color'] + ';');
-      lines.push('  background-color: ' + preset['teaser-standard-background-color'] + ';');
-      lines.push('  border: ' + preset['teaser-standard-border-color'] + ';');
-      lines.push('}');
-      lines.push(wrapperSelector + ' .object-teaser .wrapper.compact-view {');
-      lines.push('  color: ' + preset['teaser-compact-text-color'] + ';');
-      lines.push('  background-color: ' + preset['teaser-compact-background-color'] + ';');
-      lines.push('  border: ' + preset['teaser-compact-border-color'] + ';');
-      lines.push('}');
-      lines.push('');
-    });
-
-    Object.keys(presets).forEach(function (theme) {
-      var preset = presets[theme];
-      lines.push('body.builder-theme--' + theme + ' {');
-      lines.push('  font-family: $builder-' + theme + '-body-font-family;');
-      lines.push('  --builder-heading-font-family: #{$builder-' + theme + '-heading-font-family};');
-      lines.push('  --builder-header-background: #{$builder-' + theme + '-header-background};');
-      lines.push('  --builder-header-menu-background: #{$builder-' + theme + '-header-menu-background};');
-      lines.push('  --builder-footer-background: #{$builder-' + theme + '-footer-background};');
-      lines.push('  --builder-navigation-font-size: #{$builder-' + theme + '-navigation-font-size};');
-      lines.push('  --builder-footer-text-color: #{$builder-' + theme + '-footer-text-color};');
-      lines.push('  --builder-footer-font-size-desktop: #{$builder-' + theme + '-footer-font-size-desktop};');
-      lines.push('  --builder-footer-font-size-mobile: #{$builder-' + theme + '-footer-font-size-mobile};');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' h1 { font-size: $builder-' + theme + '-heading-h1-size; }');
-      lines.push('body.builder-theme--' + theme + ' h2 { font-size: $builder-' + theme + '-heading-h2-size; }');
-      lines.push('body.builder-theme--' + theme + ' h3 { font-size: $builder-' + theme + '-heading-h3-size; }');
-      lines.push('body.builder-theme--' + theme + ' h4 { font-size: $builder-' + theme + '-heading-h4-size; }');
-      lines.push('body.builder-theme--' + theme + ' h5 { font-size: $builder-' + theme + '-heading-h5-size; }');
-      lines.push('body.builder-theme--' + theme + ' h6 { font-size: $builder-' + theme + '-heading-h6-size; }');
-      lines.push('body.builder-theme--' + theme + ' h1 { color: $builder-' + theme + '-heading-h1-color; }');
-      lines.push('body.builder-theme--' + theme + ' h2 { color: $builder-' + theme + '-heading-h2-color; }');
-      lines.push('body.builder-theme--' + theme + ' h3 { color: $builder-' + theme + '-heading-h3-color; }');
-      lines.push('body.builder-theme--' + theme + ' h4 { color: $builder-' + theme + '-heading-h4-color; }');
-      lines.push('body.builder-theme--' + theme + ' h5 { color: $builder-' + theme + '-heading-h5-color; }');
-      lines.push('body.builder-theme--' + theme + ' h6 { color: $builder-' + theme + '-heading-h6-color; }');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + '.builder-button-shape--square .btn,');
-      lines.push('body.builder-theme--' + theme + '.builder-input-shape--square input,');
-      lines.push('body.builder-theme--' + theme + '.builder-input-shape--square select,');
-      lines.push('body.builder-theme--' + theme + '.builder-input-shape--square textarea { border-radius: 0; }');
-      lines.push('body.builder-theme--' + theme + '.builder-button-shape--pill .btn { border-radius: 50rem; }');
-      lines.push('body.builder-theme--' + theme + '.builder-image-shape--circle figure img,');
-      lines.push('body.builder-theme--' + theme + '.builder-image-shape--circle .image_container img { border-radius: 50%; }');
-      lines.push('body.builder-theme--' + theme + '.builder-table--striped table tbody tr:nth-child(even) { background-color: rgba(0, 0, 0, .035); }');
-      lines.push('body.builder-theme--' + theme + '.builder-accordion--flat .accordion-item { border: 0; border-radius: 0; }');
-      lines.push('body.builder-theme--' + theme + '.builder-tabs--underline .nav-tabs .nav-link { border-width: 0 0 2px; border-radius: 0; }');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' {');
-      lines.push('  font-size: $builder-' + theme + '-body-font-size;');
-      lines.push('  line-height: $builder-' + theme + '-body-line-height;');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' h1,');
-      lines.push('body.builder-theme--' + theme + ' h2,');
-      lines.push('body.builder-theme--' + theme + ' h3,');
-      lines.push('body.builder-theme--' + theme + ' h4,');
-      lines.push('body.builder-theme--' + theme + ' h5,');
-      lines.push('body.builder-theme--' + theme + ' h6 {');
-      lines.push('  font-size: $builder-' + theme + '-heading-font-size;');
-      lines.push('  color: $builder-' + theme + '-heading;');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' .wrapper {');
-      lines.push('  --bs-wrapper-bg-color: #{$builder-' + theme + '-background};');
-      lines.push('  --bs-wrapper-color: #{$builder-' + theme + '-text};');
-      lines.push('  --bs-body-color: #{$builder-' + theme + '-text};');
-      lines.push('  --bs-heading-color: #{$builder-' + theme + '-heading};');
-      lines.push('  --bs-link-color: #{$builder-' + theme + '-primary};');
-      lines.push('  --bs-primary: #{$builder-' + theme + '-primary};');
-      lines.push('  --bs-secondary: #{$builder-' + theme + '-secondary};');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' {');
-      lines.push('  --bs-link-color: #{$builder-' + theme + '-link-color};');
-      lines.push('  --bs-link-hover-color: #{$builder-' + theme + '-link-hover-color};');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article a:not(.btn),');
-      lines.push('body.builder-theme--' + theme + ' > main a:not(.btn) {');
-      lines.push('  color: $builder-' + theme + '-link-color;');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article a:not(.btn):hover,');
-      lines.push('body.builder-theme--' + theme + ' > main a:not(.btn):hover {');
-      lines.push('  color: $builder-' + theme + '-link-hover-color;');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article select,');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article textarea,');
-      lines.push('body.builder-theme--' + theme + ' > main input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),');
-      lines.push('body.builder-theme--' + theme + ' > main select,');
-      lines.push('body.builder-theme--' + theme + ' > main textarea {');
-      lines.push('  border-color: $builder-' + theme + '-input-border-color;');
-      lines.push('}');
-      lines.push('');
-      lines.push('body.builder-theme--' + theme + ' > .mod_article .card,');
-      lines.push('body.builder-theme--' + theme + ' > main .card {');
-      lines.push('  background-color: $builder-' + theme + '-surface-color;');
-      lines.push('  box-shadow: $builder-' + theme + '-surface-shadow;');
-      lines.push('}');
-      lines.push('');
-    });
-
-    return lines.join('\n');
-  }
-
-  function createProjectScssExport() {
-    var lines = [
-      '/* ----------------------------------------------------------------',
-      '  OpenFrontend Design-Builder values',
-      '  Generated wrapper overrides for custom.scss',
-      '-----------------------------------------------------------------*/',
-      ''
-    ];
-    function resolveColor(preset, variable) {
-      var value = preset[variable];
-      if (value === undefined || value === '') {
-        return 'transparent';
-      }
-      if (paletteOptions.some(function (option) {
-        return option[1] === value;
-      })) {
-        return preset[value] || 'transparent';
-      }
-      return value;
-    }
-
-    Object.keys(presets).forEach(function (theme) {
-      var preset = Object.assign({}, defaults, presets[theme]);
-      var selector = theme === 'standard' ? '.wrapper' : '.wrapper-bg-' + theme;
-
-      lines.push('/* Schema ' + theme.charAt(0).toUpperCase() + theme.slice(1) + ' */');
-      lines.push(selector + ' {');
-      lines.push('  --bs-primary: ' + preset.primary + ';');
-      lines.push('  --bs-secondary: ' + preset.secondary + ';');
-      lines.push('  --bs-success: ' + preset.success + ';');
-      lines.push('  --bs-danger: ' + preset.danger + ';');
-      lines.push('  --bs-warning: ' + preset.warning + ';');
-      lines.push('  --bs-info: ' + preset.info + ';');
-      lines.push('  --bs-light: ' + preset.light + ';');
-      lines.push('  --bs-dark: ' + preset.dark + ';');
-      lines.push('  --bs-wrapper-bg-color: ' + preset.background + ';');
-      lines.push('  --bs-wrapper-color: ' + preset.text + ';');
-      lines.push('  --bs-body-color: ' + preset.text + ';');
-      lines.push('  --bs-heading-color: ' + preset.heading + ';');
-      lines.push('  --bs-link-color: ' + preset['link-color'] + ';');
-      lines.push('  --bs-link-hover-color: ' + preset['link-hover-color'] + ';');
-      lines.push('  --bs-font-sans-serif: ' + preset['body-font-family'] + ';');
-      lines.push('  --bs-body-font-family: ' + preset['body-font-family'] + ';');
-      lines.push('  --bs-heading-font-family: ' + preset['heading-font-family'] + ';');
-      lines.push('  --bs-body-font-weight: ' + preset['body-font-weight'] + ';');
-      lines.push('  --bs-heading-font-weight: ' + preset['heading-font-weight'] + ';');
-      lines.push('  --bs-body-font-size: ' + preset['body-font-size'] + 'rem;');
-      lines.push('  font-family: ' + preset['body-font-family'] + ';');
-      lines.push('  font-size: ' + preset['body-font-size-desktop'] + 'px;');
-      lines.push('  font-weight: ' + preset['body-font-weight'] + ';');
-      lines.push('');
-
-      ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach(function (heading) {
-        lines.push('  ' + heading + ' {');
-        lines.push('    color: ' + preset['heading-' + heading + '-color'] + ';');
-        lines.push('    font-family: ' + preset['heading-font-family'] + ';');
-        lines.push('    font-size: ' + preset['heading-' + heading + '-desktop'] + 'px;');
-        lines.push('    font-weight: ' + preset['heading-font-weight'] + ';');
-        lines.push('  }');
-      });
-      lines.push('');
-      lines.push('  .subheadline,');
-      lines.push('  .item-info-subheadline {');
-      lines.push('    color: ' + preset['subheadline-color'] + ';');
-      lines.push('    font-size: ' + preset['subheadline-font-size-desktop'] + 'px;');
-      lines.push('  }');
-      lines.push('');
-      lines.push('  .lead,');
-      lines.push('  .lead-text {');
-      lines.push('    font-size: ' + preset['lead-text-font-size-desktop'] + 'px;');
-      lines.push('  }');
-      lines.push('');
-      lines.push('  @media (max-width: 767px) {');
-      lines.push('    font-size: ' + preset['body-font-size-mobile'] + 'px;');
-      ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach(function (heading) {
-        lines.push('    ' + heading + ' {');
-        lines.push('      font-size: ' + preset['heading-' + heading + '-mobile'] + 'px;');
-        lines.push('    }');
-      });
-      lines.push('    .subheadline,');
-      lines.push('    .item-info-subheadline {');
-      lines.push('      font-size: ' + preset['subheadline-font-size-mobile'] + 'px;');
-      lines.push('    }');
-      lines.push('    .lead,');
-      lines.push('    .lead-text {');
-      lines.push('      font-size: ' + preset['lead-text-font-size-mobile'] + 'px;');
-      lines.push('    }');
-      lines.push('  }');
-      lines.push('');
-
-      buttonColorDefinitions.forEach(function (definition) {
-        var buttonSelector = definition.prefix === 'link'
-          ? 'a:not(.btn)'
-          : '.btn-' + definition.prefix.replace('button-', '');
-        var state = definition.state === 'hover' ? ':hover' : '';
-        lines.push('  ' + buttonSelector + state + ' {');
-        lines.push('    color: ' + resolveColor(preset, definition.prefix + '-' + definition.state + '-text-color') + ';');
-        lines.push('    background-color: ' + resolveColor(preset, definition.prefix + '-' + definition.state + '-background-color') + ';');
-        if (definition.prefix === 'link') {
-          var decoration = resolveColor(preset, definition.prefix + '-' + definition.state + '-border-color');
-          lines.push('    text-decoration: ' + (decoration === 'transparent' ? 'none' : decoration) + ';');
-        } else {
-          lines.push('    border-color: ' + resolveColor(preset, definition.prefix + '-' + definition.state + '-border-color') + ';');
-        }
-        lines.push('  }');
-      });
-      lines.push('');
-
-      lines.push('  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),');
-      lines.push('  select,');
-      lines.push('  textarea {');
-      lines.push('    color: ' + resolveColor(preset, 'input-text-color') + ';');
-      lines.push('    background-color: ' + resolveColor(preset, 'input-background-color') + ';');
-      lines.push('    border-color: ' + resolveColor(preset, 'input-border-color') + ';');
-      lines.push('  }');
-      lines.push('');
-
-      lines.push('  .accordion {');
-      lines.push('    .accordion-button {');
-      lines.push('      color: ' + resolveColor(preset, 'accordion-title-text-color') + ';');
-      lines.push('      background-color: ' + resolveColor(preset, 'accordion-title-background-color') + ';');
-      lines.push('      border-color: ' + resolveColor(preset, 'accordion-title-border-color') + ';');
-      lines.push('    }');
-      lines.push('    .accordion-body {');
-      lines.push('      color: ' + resolveColor(preset, 'accordion-text-text-color') + ';');
-      lines.push('      background-color: ' + resolveColor(preset, 'accordion-text-background-color') + ';');
-      lines.push('      border-color: ' + resolveColor(preset, 'accordion-text-border-color') + ';');
-      lines.push('    }');
-      lines.push('  }');
-      lines.push('');
-
-      lines.push('  .nav-tabs {');
-      lines.push('    --bs-nav-link-color: ' + resolveColor(preset, 'tabs-inactive-text-color') + ';');
-      lines.push('    --bs-nav-tabs-link-active-color: ' + resolveColor(preset, 'tabs-active-text-color') + ';');
-      lines.push('    .nav-link.active {');
-      lines.push('      color: ' + resolveColor(preset, 'tabs-active-text-color') + ';');
-      lines.push('      background-color: ' + resolveColor(preset, 'tabs-active-background-color') + ';');
-      lines.push('      border-color: ' + resolveColor(preset, 'tabs-active-border-color') + ';');
-      lines.push('    }');
-      lines.push('    .nav-link:not(.active) {');
-      lines.push('      color: ' + resolveColor(preset, 'tabs-inactive-text-color') + ';');
-      lines.push('      background-color: ' + resolveColor(preset, 'tabs-inactive-background-color') + ';');
-      lines.push('      border-color: ' + resolveColor(preset, 'tabs-inactive-border-color') + ';');
-      lines.push('    }');
-      lines.push('  }');
-      lines.push('');
-
-      lines.push('  .object-teaser {');
-      lines.push('    .wrapper:not(.compact-view) {');
-      lines.push('      color: ' + preset['teaser-standard-text-color'] + ';');
-      lines.push('      background-color: ' + preset['teaser-standard-background-color'] + ';');
-      lines.push('      border: ' + preset['teaser-standard-border-color'] + ';');
-      lines.push('    }');
-      lines.push('    .wrapper.compact-view {');
-      lines.push('      color: ' + preset['teaser-compact-text-color'] + ';');
-      lines.push('      background-color: ' + preset['teaser-compact-background-color'] + ';');
-      lines.push('      border: ' + preset['teaser-compact-border-color'] + ';');
-      lines.push('    }');
-      lines.push('  }');
-      lines.push('}');
-      lines.push('');
-    });
-
-    return lines.join('\n');
-  }
-
-  async function exportScss() {
-    var generatedExport = createProjectScssExport();
-    var exportContent;
-
-    try {
-      var response = await fetch('css/custom.scss', { cache: 'no-store' });
-      if (!response.ok) {
-        throw new Error('custom.scss konnte nicht geladen werden.');
-      }
-
-      var baseScss = await response.text();
-      var standardPreset = Object.assign({}, defaults, presets.standard);
-      baseScss = baseScss.replace(
-        /(\$font-Montserrat-Ueberschrift:\s*).+?;/,
-        '$1' + standardPreset['heading-font-family'] + ';'
-      );
-      baseScss = baseScss.replace(
-        /(\$font-Hind-Fliesstext:\s*).+?;/,
-        '$1' + standardPreset['body-font-family'] + ';'
-      );
-      var generatedBlock = [
-        '/* BEGIN OPENFRONTEND DESIGN-BUILDER EXPORT */',
-        generatedExport,
-        '/* END OPENFRONTEND DESIGN-BUILDER EXPORT */'
-      ].join('\n');
-      var withoutPreviousExport = baseScss.replace(
-        /\/\* BEGIN OPENFRONTEND DESIGN-BUILDER EXPORT \*\/[\s\S]*?\/\* END OPENFRONTEND DESIGN-BUILDER EXPORT \*\/\s*/g,
-        ''
-      ).trimEnd();
-      exportContent = withoutPreviousExport + '\n\n' + generatedBlock + '\n';
-    } catch (error) {
-      setStatus('Die bestehende custom.scss konnte nicht geladen werden.', true);
+    if (!writeState()) {
+      templates[name] = template;
+      activeTemplateName = previousActiveTemplateName;
+      refreshTemplateOptions(name);
       return;
     }
 
-    var blob = new Blob([exportContent], { type: 'text/x-scss;charset=utf-8' });
+    if (templateName && templateName.value.trim() === name) {
+      templateName.value = '';
+    }
+
+    refreshTemplateOptions();
+    setStatus('Vorlage „' + name + '“ wurde gelöscht.');
+  }
+
+  function getTemplateExportFilename(name) {
+    var safeName = name
+      .trim()
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return (safeName || 'vorlage') + '.openfrontend-template.json';
+  }
+
+  function exportTemplate(name) {
+    var template = templates[name];
+
+    if (!template || !template.presets) {
+      setStatus('Bitte zuerst eine gespeicherte Vorlage auswählen.', true);
+      return;
+    }
+
+    var payload = {
+      format: templateExportFormat,
+      version: templateExportVersion,
+      exportedAt: new Date().toISOString(),
+      name: name,
+      template: {
+        activeTheme: template.activeTheme,
+        presets: clonePresets(template.presets)
+      }
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2) + '\n'], {
+      type: 'application/json'
+    });
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
+
     link.href = url;
-    link.download = (templateName && templateName.value.trim()
-      ? templateName.value.trim() + '-custom'
-      : 'custom') + '.scss';
+    link.download = getTemplateExportFilename(name);
+    link.hidden = true;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
-    setStatus('SCSS-Datei wurde heruntergeladen.');
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+    setStatus('Vorlage „' + name + '“ wurde exportiert.');
+  }
+
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function parseTemplateExport(content) {
+    var payload;
+
+    try {
+      payload = JSON.parse(content);
+    } catch (error) {
+      throw new Error('Die Importdatei enthält kein gültiges JSON.');
+    }
+
+    if (!isPlainObject(payload) || payload.format !== templateExportFormat) {
+      throw new Error('Die Datei ist keine OpenFrontend-Builder-Vorlage.');
+    }
+    if (payload.version !== templateExportVersion) {
+      throw new Error('Diese Version der Vorlagendatei wird nicht unterstützt.');
+    }
+    if (typeof payload.name !== 'string' || !payload.name.trim() || payload.name.length > 120) {
+      throw new Error('Die Vorlagendatei enthält keinen gültigen Namen.');
+    }
+    if (!isPlainObject(payload.template) || !isPlainObject(payload.template.presets)) {
+      throw new Error('Die Vorlagendatei enthält keine gültigen Designwerte.');
+    }
+
+    var availablePresets = createPresets();
+    var allowedVariables = {};
+    var normalizedPresets = {};
+
+    Object.keys(availablePresets).forEach(function (theme) {
+      Object.keys(availablePresets[theme]).forEach(function (variable) {
+        allowedVariables[variable] = true;
+      });
+    });
+
+    Object.keys(availablePresets).forEach(function (theme) {
+      var importedPreset = payload.template.presets[theme];
+
+      if (!isPlainObject(importedPreset)) {
+        throw new Error('Die Vorlagendatei enthält nicht alle benötigten Varianten.');
+      }
+
+      Object.keys(importedPreset).forEach(function (variable) {
+        if (!allowedVariables[variable]) {
+          throw new Error('Unbekannte Designvariable in der Vorlagendatei: ' + variable);
+        }
+        if (typeof importedPreset[variable] !== 'string') {
+          throw new Error('Ungültiger Wert für die Designvariable: ' + variable);
+        }
+      });
+
+      normalizedPresets[theme] = Object.assign(
+        {},
+        availablePresets[theme],
+        importedPreset
+      );
+    });
+
+    if (!normalizedPresets[payload.template.activeTheme]) {
+      throw new Error('Die Vorlagendatei enthält keine gültige aktive Variante.');
+    }
+
+    return {
+      name: payload.name.trim(),
+      template: {
+        activeTheme: payload.template.activeTheme,
+        presets: normalizedPresets
+      }
+    };
+  }
+
+  function importTemplate(file) {
+    if (!file) {
+      return;
+    }
+    if (file.size > maxImportFileSize) {
+      setStatus('Die Importdatei ist größer als 1 MB.', true);
+      return;
+    }
+
+    file.text().then(function (content) {
+      var imported = parseTemplateExport(content);
+      var hasExistingTemplate = Object.prototype.hasOwnProperty.call(
+        templates,
+        imported.name
+      );
+
+      if (
+        hasExistingTemplate &&
+        !window.confirm('Vorlage „' + imported.name + '“ überschreiben?')
+      ) {
+        setStatus('Der Import wurde abgebrochen.');
+        return;
+      }
+
+      var previousTemplate = templates[imported.name];
+      var previousActiveTemplateName = activeTemplateName;
+      templates[imported.name] = imported.template;
+      activeTemplateName = imported.name;
+
+      if (!writeState()) {
+        if (hasExistingTemplate) {
+          templates[imported.name] = previousTemplate;
+        } else {
+          delete templates[imported.name];
+        }
+        activeTemplateName = previousActiveTemplateName;
+        refreshTemplateOptions(previousActiveTemplateName);
+        return;
+      }
+
+      loadTemplate(imported.name);
+      setStatus('Vorlage „' + imported.name + '“ wurde importiert und geladen.');
+    }).catch(function (error) {
+      setStatus(error.message || 'Die Vorlagendatei konnte nicht gelesen werden.', true);
+    });
   }
 
   fields.forEach(function (field) {
@@ -1755,8 +1324,6 @@
 
       applyVariable('background', value);
       saveActivePreset();
-      writeDraft();
-      saveCurrentTemplate();
       setStatus('Änderungen werden live angezeigt.');
     });
   }
@@ -1774,8 +1341,6 @@
       }
       applyVariable(variable, value);
       saveActivePreset();
-      writeDraft();
-      saveCurrentTemplate();
       setStatus('Änderungen werden live angezeigt.');
     });
   });
@@ -1785,8 +1350,6 @@
       if (source.value) {
         applyPaletteSource(source.dataset.builderColorSource, source.value);
         saveActivePreset();
-        writeDraft();
-        saveCurrentTemplate();
       }
       setStatus('Farbpalette wurde angewendet.');
     });
@@ -1818,8 +1381,6 @@
       ensureVariantPreset(activeTheme);
       setTheme(themeSelect.value);
       loadPreset(activeTheme);
-      writeDraft();
-      saveCurrentTemplate();
       if (templateThemeSelect) {
         templateThemeSelect.value = activeTheme;
       }
@@ -1843,26 +1404,9 @@
     saveTemplateButton.addEventListener('click', saveTemplate);
   }
 
-  if (deleteTemplateButton) {
-    deleteTemplateButton.addEventListener('click', deleteTemplate);
-  }
-
-  if (resetDraftButton) {
-    resetDraftButton.addEventListener('click', resetDraft);
-  }
-
-  if (resetTemplateColorsButton) {
-    resetTemplateColorsButton.addEventListener('click', resetTemplateColors);
-  }
-
   if (templateSelect) {
     templateSelect.addEventListener('change', function () {
-      if (deleteTemplateButton) {
-        deleteTemplateButton.disabled = !templateSelect.value;
-      }
-      if (loadTemplateButton) {
-        loadTemplateButton.disabled = !templateSelect.value;
-      }
+      updateTemplateButtonState();
     });
   }
 
@@ -1872,16 +1416,28 @@
     });
   }
 
-  if (exportButton) {
-    exportButton.addEventListener('click', exportScss);
+  if (deleteTemplateButton) {
+    deleteTemplateButton.addEventListener('click', function () {
+      deleteTemplate(templateSelect ? templateSelect.value : '');
+    });
   }
 
-  readTemplates();
-  refreshTemplateOptions();
-  readDraft();
+  if (exportTemplateButton) {
+    exportTemplateButton.addEventListener('click', function () {
+      exportTemplate(templateSelect ? templateSelect.value : '');
+    });
+  }
 
-  window.addEventListener('beforeunload', function () {
-    saveActivePreset();
-    writeDraft();
-  });
+  if (importTemplateButton && importFileInput) {
+    importTemplateButton.addEventListener('click', function () {
+      importFileInput.click();
+    });
+    importFileInput.addEventListener('change', function () {
+      var file = importFileInput.files && importFileInput.files[0];
+      importFileInput.value = '';
+      importTemplate(file);
+    });
+  }
+
+  restoreState();
 }());
