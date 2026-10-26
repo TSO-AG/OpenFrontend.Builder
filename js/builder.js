@@ -9,6 +9,13 @@
     return;
   }
 
+  // The ?v= cache-busting parameter of this script is the displayed builder version.
+  var versionOutput = panel.querySelector('[data-builder-version]');
+  if (versionOutput && document.currentScript) {
+    var builderVersion = new URL(document.currentScript.src).searchParams.get('v');
+    versionOutput.textContent = builderVersion ? 'Version ' + builderVersion : '';
+  }
+
   var defaults = {
     primary: '#5b8f22',
     secondary: '#b0d786',
@@ -544,9 +551,7 @@
   var colorSources = panel.querySelectorAll('[data-builder-color-source]');
   var googleFontInputs = panel.querySelectorAll('[data-builder-google-font]');
   var googleFontButtons = panel.querySelectorAll('[data-builder-google-font-apply]');
-  var sectionSelect = panel.querySelector('[data-builder-section-select]');
   var themeSelect = panel.querySelector('[data-builder-theme]');
-  var templateThemeSelect = panel.querySelector('[data-builder-template-theme]');
   var status = panel.querySelector('[data-builder-status]');
   var templateName = panel.querySelector('[data-builder-template-name]');
   var templateSelect = panel.querySelector('[data-builder-template]');
@@ -597,15 +602,21 @@
   var templateExportVersion = 1;
   var maxImportFileSize = 1024 * 1024;
   var templates = {};
+  var viewportButtons = panel.querySelectorAll('[data-builder-viewport]');
+  var previewParam = 'builder-preview';
+  var previewMessageType = 'openfrontend-builder-preview';
+  var isPreviewFrame = window.parent !== window &&
+    new URLSearchParams(window.location.search).get(previewParam) === 'mobile';
+  var previewFrame = null;
+  var previewContainer = null;
+  var previewFrameReady = false;
+  var previewSyncTimer = null;
+  // iPhone 14/15 viewport (390 x 844) plus a 12px bezel on each side.
+  var previewDeviceWidth = 390 + 24;
+  var previewDeviceHeight = 844 + 24;
 
-  function showBuilderSection(sectionName) {
-    panel.querySelectorAll('[data-builder-section]').forEach(function (section) {
-      section.hidden = section.dataset.builderSection !== sectionName;
-    });
-  }
-
-  function updateEditorVisibility() {
-    showBuilderSection(sectionSelect ? sectionSelect.value : 'setup');
+  if (isPreviewFrame) {
+    body.classList.add('builder-preview-frame');
   }
 
   function getInputValue(field) {
@@ -717,6 +728,7 @@
     applyVariable(variable, fontValue);
     saveActivePreset();
     presets[activeTheme][variable] = fontValue;
+    schedulePreviewSync();
     setStatus('Google-Schriftart wird geladen: ' + family);
   }
 
@@ -832,6 +844,7 @@
     fields.forEach(function (field) {
       presets[activeTheme][field.dataset.builderVariable] = getInputValue(field);
     });
+    schedulePreviewSync();
   }
 
   function clonePresets(source) {
@@ -884,6 +897,7 @@
     googleFontInputs.forEach(function (input) {
       input.value = '';
     });
+    schedulePreviewSync();
   }
 
   function setTheme(theme) {
@@ -894,6 +908,150 @@
       'builder-theme--light'
     );
     body.classList.add('builder-theme--' + theme);
+    schedulePreviewSync();
+  }
+
+  function getPreviewState() {
+    var values = Object.assign({}, defaults, presets[activeTheme]);
+
+    fields.forEach(function (field) {
+      values[field.dataset.builderVariable] = getInputValue(field);
+    });
+
+    return {
+      type: previewMessageType,
+      theme: activeTheme,
+      values: values,
+      fonts: Array.prototype.map.call(
+        document.querySelectorAll('link[id^="builder-google-font-"]'),
+        function (link) {
+          return { id: link.id, href: link.href };
+        }
+      )
+    };
+  }
+
+  function syncPreview() {
+    previewSyncTimer = null;
+
+    if (!previewFrame || !previewFrame.contentWindow || !previewFrameReady) {
+      return;
+    }
+
+    previewFrame.contentWindow.postMessage(getPreviewState(), window.location.origin);
+  }
+
+  function schedulePreviewSync() {
+    if (!previewFrame || previewSyncTimer) {
+      return;
+    }
+
+    previewSyncTimer = window.setTimeout(syncPreview, 50);
+  }
+
+  function updatePreviewScale() {
+    if (!previewContainer || previewContainer.hidden) {
+      return;
+    }
+
+    var style = window.getComputedStyle(previewContainer);
+    var availableWidth = previewContainer.clientWidth -
+      parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    var availableHeight = previewContainer.clientHeight -
+      parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    var scale = Math.min(
+      1,
+      availableWidth / previewDeviceWidth,
+      availableHeight / previewDeviceHeight
+    );
+
+    previewContainer.style.setProperty(
+      '--builder-device-scale',
+      String(Math.max(scale, 0.3))
+    );
+  }
+
+  function createPreviewFrame() {
+    var container = document.createElement('div');
+    var slot = document.createElement('div');
+    var device = document.createElement('div');
+    var url = new URL(window.location.href);
+
+    url.hash = '';
+    url.searchParams.set(previewParam, 'mobile');
+
+    container.className = 'builder-mobile-preview';
+    container.hidden = true;
+    container.style.setProperty('--builder-device-width', previewDeviceWidth + 'px');
+    container.style.setProperty('--builder-device-height', previewDeviceHeight + 'px');
+    slot.className = 'builder-mobile-preview__slot';
+    device.className = 'builder-mobile-preview__device';
+    previewFrame = document.createElement('iframe');
+    previewFrame.title = 'Mobile-Vorschau';
+    previewFrame.src = url.toString();
+    previewFrame.addEventListener('load', function () {
+      previewFrameReady = true;
+      syncPreview();
+    });
+    device.appendChild(previewFrame);
+    slot.appendChild(device);
+    container.appendChild(slot);
+    body.appendChild(container);
+    window.addEventListener('resize', updatePreviewScale);
+
+    return container;
+  }
+
+  function setViewport(viewport) {
+    var isMobile = viewport === 'mobile';
+
+    if (isMobile && !previewContainer) {
+      previewContainer = createPreviewFrame();
+    }
+    if (previewContainer) {
+      previewContainer.hidden = !isMobile;
+    }
+
+    body.classList.toggle('builder-viewport--mobile', isMobile);
+    viewportButtons.forEach(function (button) {
+      button.setAttribute(
+        'aria-pressed',
+        String(button.dataset.builderViewport === viewport)
+      );
+    });
+
+    if (isMobile) {
+      updatePreviewScale();
+      saveActivePreset();
+      syncPreview();
+    }
+  }
+
+  function applyPreviewState(state) {
+    state.fonts.forEach(function (font) {
+      if (!/^builder-google-font-[a-z0-9-]+$/.test(font.id) ||
+        font.href.indexOf('https://fonts.googleapis.com/') !== 0) {
+        return;
+      }
+
+      var link = document.getElementById(font.id);
+      if (!link) {
+        link = document.createElement('link');
+        link.id = font.id;
+        link.rel = 'stylesheet';
+        document.head.appendChild(link);
+      }
+      if (link.href !== font.href) {
+        link.href = font.href;
+      }
+    });
+
+    setTheme(state.theme);
+    Object.keys(state.values).forEach(function (variable) {
+      if (typeof state.values[variable] === 'string') {
+        applyVariable(variable, state.values[variable]);
+      }
+    });
   }
 
   function updateVariable(event) {
@@ -992,7 +1150,6 @@
 
     if (!state) {
       refreshTemplateOptions();
-      updateEditorVisibility();
       return;
     }
 
@@ -1016,14 +1173,10 @@
     if (themeSelect) {
       themeSelect.value = activeTheme;
     }
-    if (templateThemeSelect) {
-      templateThemeSelect.value = activeTheme;
-    }
 
     setTheme(activeTheme);
     loadPreset(activeTheme);
     refreshTemplateOptions(activeTemplateName);
-    updateEditorVisibility();
 
     if (state.migrated && writeState()) {
       storage.removeItem(legacyTemplatesKey);
@@ -1085,7 +1238,6 @@
 
     if (writeState()) {
       refreshTemplateOptions(name);
-      updateEditorVisibility();
       setStatus('Vorlage „' + name + '“ wurde gespeichert.');
     }
   }
@@ -1110,7 +1262,6 @@
     }
     writeState();
     refreshTemplateOptions(name);
-    updateEditorVisibility();
     setStatus('Vorlage „' + name + '“ wurde geladen.');
   }
 
@@ -1367,13 +1518,6 @@
     });
   });
 
-  if (sectionSelect) {
-    sectionSelect.addEventListener('change', function () {
-      showBuilderSection(sectionSelect.value);
-    });
-    showBuilderSection(sectionSelect.value);
-  }
-
   if (themeSelect) {
     themeSelect.addEventListener('change', function () {
       saveActivePreset();
@@ -1381,23 +1525,10 @@
       ensureVariantPreset(activeTheme);
       setTheme(themeSelect.value);
       loadPreset(activeTheme);
-      if (templateThemeSelect) {
-        templateThemeSelect.value = activeTheme;
-      }
       setStatus('Variante: ' + themeSelect.options[themeSelect.selectedIndex].text);
     });
     setTheme(themeSelect.value);
     loadPreset(activeTheme);
-  }
-
-  if (templateThemeSelect) {
-    templateThemeSelect.value = activeTheme;
-    templateThemeSelect.addEventListener('change', function () {
-      if (themeSelect) {
-        themeSelect.value = templateThemeSelect.value;
-        themeSelect.dispatchEvent(new Event('change'));
-      }
-    });
   }
 
   if (saveTemplateButton) {
@@ -1425,6 +1556,32 @@
   if (exportTemplateButton) {
     exportTemplateButton.addEventListener('click', function () {
       exportTemplate(templateSelect ? templateSelect.value : '');
+    });
+  }
+
+  viewportButtons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      setViewport(button.dataset.builderViewport);
+    });
+  });
+
+  if (isPreviewFrame) {
+    window.addEventListener('message', function (event) {
+      var state = event.data;
+
+      if (
+        event.origin !== window.location.origin ||
+        event.source !== window.parent ||
+        !state ||
+        state.type !== previewMessageType ||
+        !presets[state.theme] ||
+        !isPlainObject(state.values) ||
+        !Array.isArray(state.fonts)
+      ) {
+        return;
+      }
+
+      applyPreviewState(state);
     });
   }
 

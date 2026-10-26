@@ -29,7 +29,7 @@
                         <link href="layout/app.dec79356.css" rel="stylesheet">
         <link href="css/openfrontend.css" rel="stylesheet">
                         <link href="css/custom.css" rel="stylesheet">
-                        <link href="css/builder.css?v=20261015-template-export" rel="stylesheet">
+                        <link href="css/builder.css?v=1.0.0" rel="stylesheet">
     <style nonce="RTpBUU+3ydYSyAombYQFPQ==">.masonry{--bs-masonry-gap:10px}.row{--bs-gutter-x:0.625rem;--bs-gutter-y:0.625rem}</style>
 
                             <style nonce="RTpBUU+3ydYSyAombYQFPQ==">
@@ -48,15 +48,9 @@
 
                     <aside class="builder-panel" data-builder-panel aria-label="Design-Builder">
         <h1>Design-Builder</h1>
-                        <div class="builder-section-switcher">
-                            <span class="builder-section-switcher__label">Arbeitsbereich</span>
-                            <label class="builder-section-select">
-                                <span class="visually-hidden">Bereich auswählen</span>
-                                <select data-builder-section-select aria-controls="builder-setup-section builder-templates-section">
-                                    <option value="setup">Setup</option>
-                                    <option value="templates">Vorlagen</option>
-                                </select>
-                            </label>
+                        <div class="builder-viewport-switch" role="group" aria-label="Ansicht">
+                            <button type="button" data-builder-viewport="desktop" aria-pressed="true">Desktop</button>
+                            <button type="button" data-builder-viewport="mobile" aria-pressed="false">Mobile</button>
                         </div>
                         <label class="builder-template-name">
                             Vorlagenname
@@ -403,19 +397,8 @@
             </div>
         </div>
         </section>
-        <section id="builder-templates-section" class="builder-section builder-section--templates" data-builder-section="templates" aria-labelledby="builder-templates-title" hidden>
+        <section id="builder-templates-section" class="builder-section builder-section--templates" data-builder-section="templates" aria-labelledby="builder-templates-title">
         <h2 id="builder-templates-title">Vorlagen</h2>
-        <fieldset>
-            <label>
-                Wrapper-Variante
-                <select data-builder-template-theme>
-                    <option value="standard">Standard</option>
-                    <option value="custom">Custom</option>
-                    <option value="dark">Dark</option>
-                    <option value="light">Light</option>
-                </select>
-            </label>
-        </fieldset>
         <fieldset class="builder-template-font-colors">
             <legend>Farben der Schriften</legend>
             <div class="builder-template-heading-colors">
@@ -518,6 +501,7 @@
         </fieldset>
         </section>
         <p class="builder-panel__status" data-builder-status aria-live="polite">Bereit für Anpassungen.</p>
+        <p class="builder-panel__version" data-builder-version></p>
     </aside>
 
                     <!-- indexer::stop -->
@@ -13573,6 +13557,6 @@
     ]
 }
 </script>
-<script src="js/builder.js?v=20261015-template-export"></script>
+<script src="js/builder.js?v=1.0.0"></script>
 </body>
 </html>
