@@ -29,7 +29,7 @@
                         <link href="layout/app.dec79356.css" rel="stylesheet">
         <link href="css/openfrontend.css" rel="stylesheet">
                         <link href="css/custom.css" rel="stylesheet">
-                        <link href="css/builder.css?v=1.0.0" rel="stylesheet">
+                        <link href="css/builder.css?v=1.4.0" rel="stylesheet">
     <style nonce="RTpBUU+3ydYSyAombYQFPQ==">.masonry{--bs-masonry-gap:10px}.row{--bs-gutter-x:0.625rem;--bs-gutter-y:0.625rem}</style>
 
                             <style nonce="RTpBUU+3ydYSyAombYQFPQ==">
@@ -47,29 +47,47 @@
 <body data-object-cart-url="https://blueprint.erlebnismacher.ch/_object_cart/index/3/6070">
 
                     <aside class="builder-panel" data-builder-panel aria-label="Design-Builder">
-        <h1>Design-Builder</h1>
-                        <div class="builder-viewport-switch" role="group" aria-label="Ansicht">
-                            <button type="button" data-builder-viewport="desktop" aria-pressed="true">Desktop</button>
-                            <button type="button" data-builder-viewport="mobile" aria-pressed="false">Mobile</button>
-                        </div>
-                        <label class="builder-template-name">
-                            Vorlagenname
-                            <input type="text" data-builder-template-name placeholder="z. B. Tourismus Standard">
-                        </label>
-                        <label class="builder-template-select">
-                            Gespeicherte Vorlage
-                            <select data-builder-template>
-                                <option value="">Keine Vorlage ausgewählt</option>
-                            </select>
-                        </label>
-                        <div class="builder-panel__actions builder-template-actions">
-                            <button type="button" data-builder-load-template disabled>Vorlage laden</button>
-                            <button type="button" data-builder-delete-template disabled>Vorlage löschen</button>
-                            <button type="button" data-builder-save>Vorlage speichern</button>
-                            <button type="button" data-builder-export-template disabled>Vorlage exportieren</button>
-                            <button type="button" data-builder-import-template>Vorlage importieren</button>
-                            <input type="file" data-builder-import-file accept=".json,application/json" hidden>
-                        </div>
+        <div class="builder-panel__header">
+            <h1>Design-Builder</h1>
+            <div class="builder-viewport-switch" role="group" aria-label="Ansicht">
+                <button type="button" data-builder-viewport="desktop" aria-pressed="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+                    Desktop
+                </button>
+                <button type="button" data-builder-viewport="mobile" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg>
+                    Mobile
+                </button>
+            </div>
+        </div>
+        <section class="builder-card builder-template-manager" aria-labelledby="builder-template-manager-title">
+            <h2 id="builder-template-manager-title" class="builder-card__title">Vorlage</h2>
+            <p class="builder-template-manager__hint" data-builder-lock-hint hidden>Erstelle zuerst eine neue Vorlage oder lade eine gespeicherte, um das Design zu bearbeiten.</p>
+            <div class="builder-template-manager__group">
+                <label class="builder-template-name">
+                    Vorlagenname
+                    <input type="text" data-builder-template-name placeholder="z. B. Tourismus Standard">
+                </label>
+                <button type="button" class="builder-button builder-button--primary" data-builder-save>Vorlage speichern</button>
+            </div>
+            <div class="builder-template-manager__group">
+                <label class="builder-template-select">
+                    Gespeicherte Vorlage
+                    <select data-builder-template>
+                        <option value="">Keine Vorlage ausgewählt</option>
+                    </select>
+                </label>
+                <div class="builder-button-row">
+                    <button type="button" class="builder-button" data-builder-load-template disabled>Vorlage laden</button>
+                    <button type="button" class="builder-button builder-button--danger" data-builder-delete-template disabled>Vorlage löschen</button>
+                </div>
+            </div>
+            <div class="builder-button-row builder-template-manager__transfer">
+                <button type="button" class="builder-button builder-button--ghost" data-builder-export-template disabled>Vorlage exportieren</button>
+                <button type="button" class="builder-button builder-button--ghost" data-builder-import-template>Vorlage importieren</button>
+                <input type="file" data-builder-import-file accept=".json,application/json" hidden>
+            </div>
+        </section>
         <section id="builder-setup-section" class="builder-section builder-section--setup" data-builder-section="setup" aria-labelledby="builder-setup-title">
             <h2 id="builder-setup-title">Setup</h2>
         <fieldset>
@@ -142,9 +160,15 @@
         <fieldset>
             <legend>Schriftarten</legend>
             <div class="builder-google-font-option">
-                Überschriften
-                <input type="text" data-builder-google-font="heading-font-family"
-                    placeholder="z. B. Open Sans">
+                <label class="builder-google-font-option__title" for="builder-font-heading">Überschriften</label>
+                <div class="builder-font-search">
+                    <input type="text" id="builder-font-heading" data-builder-google-font="heading-font-family"
+                        role="combobox" aria-autocomplete="list" aria-expanded="false"
+                        aria-controls="builder-font-list-heading" autocomplete="off" spellcheck="false"
+                        placeholder="Google Font suchen, z. B. Open Sans">
+                    <ul class="builder-font-search__list" id="builder-font-list-heading" role="listbox"
+                        aria-label="Google Fonts" hidden></ul>
+                </div>
                 <label>
                     Schriftstärke
                     <select data-builder-variable="heading-font-weight">
@@ -158,14 +182,18 @@
                         <option value="800">800</option>
                         <option value="900">900</option>
                     </select>
-            </label>
-                <button type="button" class="builder-font-apply"
-                    data-builder-google-font-apply="heading-font-family">Anwenden</button>
+                </label>
             </div>
             <div class="builder-google-font-option">
-                Fliesstext
-                <input type="text" data-builder-google-font="body-font-family"
-                    placeholder="z. B. Source Sans 3">
+                <label class="builder-google-font-option__title" for="builder-font-body">Fliesstext</label>
+                <div class="builder-font-search">
+                    <input type="text" id="builder-font-body" data-builder-google-font="body-font-family"
+                        role="combobox" aria-autocomplete="list" aria-expanded="false"
+                        aria-controls="builder-font-list-body" autocomplete="off" spellcheck="false"
+                        placeholder="Google Font suchen, z. B. Source Sans 3">
+                    <ul class="builder-font-search__list" id="builder-font-list-body" role="listbox"
+                        aria-label="Google Fonts" hidden></ul>
+                </div>
                 <label>
                     Schriftstärke
                     <select data-builder-variable="body-font-weight">
@@ -179,9 +207,7 @@
                         <option value="800">800</option>
                         <option value="900">900</option>
                     </select>
-            </label>
-                <button type="button" class="builder-font-apply"
-                    data-builder-google-font-apply="body-font-family">Anwenden</button>
+                </label>
             </div>
         </fieldset>
         <div class="builder-subsection builder-subsection--font-sizes">
@@ -500,8 +526,14 @@
             </div>
         </fieldset>
         </section>
-        <p class="builder-panel__status" data-builder-status aria-live="polite">Bereit für Anpassungen.</p>
-        <p class="builder-panel__version" data-builder-version></p>
+        <div class="builder-panel__footer">
+            <div class="builder-toast" data-builder-toast aria-hidden="true">
+                <svg class="builder-toast__icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+                <span data-builder-toast-text></span>
+            </div>
+            <p class="builder-panel__status" data-builder-status aria-live="polite">Bereit für Anpassungen.</p>
+            <p class="builder-panel__version" data-builder-version></p>
+        </div>
     </aside>
 
                     <!-- indexer::stop -->
@@ -13557,6 +13589,6 @@
     ]
 }
 </script>
-<script src="js/builder.js?v=1.0.0"></script>
+<script src="js/builder.js?v=1.4.0"></script>
 </body>
 </html>

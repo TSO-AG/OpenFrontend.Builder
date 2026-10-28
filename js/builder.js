@@ -550,7 +550,11 @@
   var headerColorPickers = panel.querySelectorAll('[data-builder-header-color-picker]');
   var colorSources = panel.querySelectorAll('[data-builder-color-source]');
   var googleFontInputs = panel.querySelectorAll('[data-builder-google-font]');
-  var googleFontButtons = panel.querySelectorAll('[data-builder-google-font-apply]');
+  var googleFontListUrl = 'https://api.fontsource.org/v1/fonts?type=google';
+  // Families already bundled in fonts/google-fonts.css need no extra stylesheet.
+  var localFontFamilies = ['Hind', 'Montserrat', 'Roboto'];
+  var googleFontList = null;
+  var googleFontListRequest = null;
   var themeSelect = panel.querySelector('[data-builder-theme]');
   var status = panel.querySelector('[data-builder-status]');
   var templateName = panel.querySelector('[data-builder-template-name]');
@@ -595,6 +599,13 @@
   });
   var activeTheme = themeSelect ? themeSelect.value : 'standard';
   var activeTemplateName = '';
+  var hasUnsavedChanges = false;
+  var editorSections = panel.querySelectorAll('[data-builder-section]');
+  var lockHint = panel.querySelector('[data-builder-lock-hint]');
+  var toast = panel.querySelector('[data-builder-toast]');
+  var toastText = panel.querySelector('[data-builder-toast-text]');
+  var toastTimer = null;
+  var saveFeedbackTimer = null;
   var storageKey = 'openfrontend-builder';
   var legacyTemplatesKey = 'openfrontend-builder-templates';
   var legacyDraftKey = 'openfrontend-builder-draft';
@@ -698,22 +709,99 @@
     });
   }
 
-  function loadGoogleFont(input) {
-    var family = input.value.trim();
-    var variable = input.dataset.builderGoogleFont;
-
-    if (!family) {
-      setStatus('Bitte zuerst einen Google-Font-Namen eingeben.', true);
-      return;
+  function fetchGoogleFontList() {
+    if (googleFontList) {
+      return Promise.resolve(googleFontList);
     }
 
-    if (!/^[A-Za-z0-9 .'-]+$/.test(family)) {
-      setStatus('Bitte einen gültigen Google-Font-Namen eingeben.', true);
-      return;
+    if (!googleFontListRequest) {
+      googleFontListRequest = fetch(googleFontListUrl)
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          if (!Array.isArray(data)) {
+            throw new Error('Unerwartetes Format der Google-Fonts-Liste.');
+          }
+
+          googleFontList = data
+            .filter(function (font) {
+              return font && typeof font.family === 'string' &&
+                /^[A-Za-z0-9 .'-]+$/.test(font.family) &&
+                Array.isArray(font.weights);
+            })
+            .map(function (font) {
+              return {
+                family: font.family,
+                key: font.family.toLowerCase(),
+                category: typeof font.category === 'string' ? font.category : '',
+                weights: font.weights
+                  .filter(function (weight) {
+                    return Number.isInteger(weight) && weight >= 100 && weight <= 900;
+                  })
+                  .sort(function (a, b) {
+                    return a - b;
+                  })
+              };
+            })
+            .sort(function (a, b) {
+              return a.family.localeCompare(b.family);
+            });
+
+          return googleFontList;
+        })
+        .catch(function (error) {
+          googleFontListRequest = null;
+          throw error;
+        });
     }
 
+    return googleFontListRequest;
+  }
+
+  function findGoogleFont(family) {
+    var key = family.trim().toLowerCase();
+
+    if (!googleFontList) {
+      return null;
+    }
+
+    for (var i = 0; i < googleFontList.length; i += 1) {
+      if (googleFontList[i].key === key) {
+        return googleFontList[i];
+      }
+    }
+
+    return null;
+  }
+
+  function getFontFamilyFromValue(value) {
+    var match = /^\s*'((?:[^'\\]|\\.)+)'/.exec(value || '');
+    return match ? match[1].replace(/\\'/g, "'") : '';
+  }
+
+  function getFontFallback(category) {
+    return {
+      serif: 'serif',
+      monospace: 'monospace',
+      handwriting: 'cursive'
+    }[category] || 'sans-serif';
+  }
+
+  function setGoogleFontLink(variable, family, weights) {
     var linkId = 'builder-google-font-' + variable;
     var link = document.getElementById(linkId);
+
+    if (localFontFamilies.indexOf(family) !== -1) {
+      if (link) {
+        link.remove();
+      }
+      return;
+    }
+
     if (!link) {
       link = document.createElement('link');
       link.id = linkId;
@@ -721,15 +809,285 @@
       document.head.appendChild(link);
     }
 
-    link.href = 'https://fonts.googleapis.com/css2?family=' +
+    // Google returns an error when a requested weight does not exist,
+    // so only the weights known for this family are requested.
+    var href = 'https://fonts.googleapis.com/css2?family=' +
       encodeURIComponent(family).replace(/%20/g, '+') +
-      ':wght@100;200;300;400;500;600;700;800;900&display=swap';
-    var fontValue = "'" + family.replace(/'/g, "\\'") + "', sans-serif";
+      (weights && weights.length ? ':wght@' + weights.join(';') : '') +
+      '&display=swap';
+
+    if (link.href !== href) {
+      link.href = href;
+    }
+  }
+
+  function getFontWeightSelect(variable) {
+    return panel.querySelector(
+      '[data-builder-variable="' + variable.replace(/-family$/, '-weight') + '"]'
+    );
+  }
+
+  function updateFontWeightOptions(variable, font, adjustValue) {
+    var select = getFontWeightSelect(variable);
+    var weights = font && font.weights.length ? font.weights : null;
+
+    if (!select) {
+      return;
+    }
+
+    Array.prototype.forEach.call(select.options, function (option) {
+      option.disabled = Boolean(weights) && weights.indexOf(Number(option.value)) === -1;
+    });
+
+    if (!adjustValue || !weights || weights.indexOf(Number(select.value)) !== -1) {
+      return;
+    }
+
+    var current = Number(select.value);
+    var nearest = weights.reduce(function (best, weight) {
+      return Math.abs(weight - current) < Math.abs(best - current) ? weight : best;
+    }, weights[0]);
+
+    select.value = String(nearest);
+    applyVariable(select.dataset.builderVariable, select.value);
+  }
+
+  function applyGoogleFont(input, family, font) {
+    var variable = input.dataset.builderGoogleFont;
+    var fontValue = "'" + family.replace(/'/g, "\\'") + "', " +
+      getFontFallback(font ? font.category : '');
+
+    input.value = family;
+    setGoogleFontLink(variable, family, font ? font.weights : null);
+    updateFontWeightOptions(variable, font, true);
     applyVariable(variable, fontValue);
     saveActivePreset();
     presets[activeTheme][variable] = fontValue;
     schedulePreviewSync();
-    setStatus('Google-Schriftart wird geladen: ' + family);
+    markChanged();
+    setStatus('Schriftart „' + family + '“ wurde angewendet.');
+  }
+
+  function applyTypedGoogleFont(input) {
+    var family = input.value.trim();
+    var font;
+
+    if (!family) {
+      setStatus('Bitte zuerst eine Google Font suchen.', true);
+      return;
+    }
+
+    font = findGoogleFont(family);
+    if (font) {
+      applyGoogleFont(input, font.family, font);
+      return;
+    }
+
+    if (googleFontList) {
+      setStatus('„' + family + '“ wurde in Google Fonts nicht gefunden.', true);
+      return;
+    }
+
+    // Font list unavailable: fall back to the typed name.
+    if (!/^[A-Za-z0-9 .'-]+$/.test(family)) {
+      setStatus('Bitte einen gültigen Google-Font-Namen eingeben.', true);
+      return;
+    }
+
+    applyGoogleFont(input, family, null);
+  }
+
+  function restoreGoogleFont(input, family) {
+    var variable = input.dataset.builderGoogleFont;
+
+    input.value = family;
+    updateFontWeightOptions(variable, null, false);
+
+    if (!family || isPreviewFrame) {
+      return;
+    }
+
+    if (localFontFamilies.indexOf(family) !== -1) {
+      setGoogleFontLink(variable, family, null);
+      return;
+    }
+
+    fetchGoogleFontList().then(function () {
+      var font = findGoogleFont(family);
+
+      if (input.value.trim() === family) {
+        setGoogleFontLink(variable, family, font ? font.weights : null);
+        updateFontWeightOptions(variable, font, false);
+        schedulePreviewSync();
+      }
+    }, function () {
+      if (input.value.trim() === family) {
+        setGoogleFontLink(variable, family, null);
+        schedulePreviewSync();
+      }
+    });
+  }
+
+  function setupGoogleFontSearch(input) {
+    var list = document.getElementById(input.getAttribute('aria-controls'));
+    var results = [];
+    var activeIndex = -1;
+    var searchId = 0;
+
+    if (!list) {
+      return;
+    }
+
+    function close() {
+      list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      activeIndex = -1;
+    }
+
+    function open() {
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function renderMessage(message) {
+      var item = document.createElement('li');
+
+      results = [];
+      activeIndex = -1;
+      list.textContent = '';
+      item.className = 'builder-font-search__message';
+      item.setAttribute('role', 'presentation');
+      item.textContent = message;
+      list.appendChild(item);
+      input.removeAttribute('aria-activedescendant');
+      open();
+    }
+
+    function highlight(index) {
+      var items = list.querySelectorAll('[role="option"]');
+
+      activeIndex = index;
+      items.forEach(function (item, itemIndex) {
+        item.setAttribute('aria-selected', String(itemIndex === index));
+      });
+
+      if (items[index]) {
+        input.setAttribute('aria-activedescendant', items[index].id);
+        items[index].scrollIntoView({ block: 'nearest' });
+      } else {
+        input.removeAttribute('aria-activedescendant');
+      }
+    }
+
+    function choose(index) {
+      var font = results[index];
+
+      if (font) {
+        close();
+        applyGoogleFont(input, font.family, font);
+      }
+    }
+
+    function render() {
+      list.textContent = '';
+      results.forEach(function (font, index) {
+        var item = document.createElement('li');
+        var name = document.createElement('span');
+        var meta = document.createElement('span');
+
+        item.id = list.id + '-' + index;
+        item.className = 'builder-font-search__option';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', 'false');
+        name.className = 'builder-font-search__name';
+        name.textContent = font.family;
+        meta.className = 'builder-font-search__meta';
+        meta.textContent = font.weights.length === 1
+          ? font.category + ' · 1 Stärke'
+          : font.category + ' · ' + font.weights.length + ' Stärken';
+        item.appendChild(name);
+        item.appendChild(meta);
+        item.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+        });
+        item.addEventListener('click', function () {
+          choose(index);
+        });
+        list.appendChild(item);
+      });
+      open();
+      highlight(activeIndex);
+    }
+
+    function search() {
+      var query = input.value.trim().toLowerCase();
+      var currentSearch = searchId += 1;
+
+      if (!googleFontList) {
+        renderMessage('Google Fonts werden geladen …');
+      }
+
+      fetchGoogleFontList().then(function (fonts) {
+        var startsWith = [];
+        var contains = [];
+
+        if (currentSearch !== searchId || document.activeElement !== input) {
+          return;
+        }
+
+        fonts.forEach(function (font) {
+          var position = query ? font.key.indexOf(query) : 0;
+
+          if (position === 0) {
+            startsWith.push(font);
+          } else if (position > 0) {
+            contains.push(font);
+          }
+        });
+
+        results = startsWith.concat(contains).slice(0, 50);
+        if (!results.length) {
+          renderMessage('Keine Google Font gefunden.');
+          return;
+        }
+
+        activeIndex = query ? 0 : -1;
+        render();
+      }, function () {
+        if (currentSearch === searchId && document.activeElement === input) {
+          renderMessage('Liste nicht erreichbar. Namen eingeben und Enter drücken.');
+        }
+      });
+    }
+
+    input.addEventListener('focus', search);
+    input.addEventListener('input', search);
+    input.addEventListener('blur', close);
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (list.hidden) {
+          search();
+          return;
+        }
+        if (results.length) {
+          var step = event.key === 'ArrowDown' ? 1 : -1;
+          highlight((activeIndex + step + results.length) % results.length);
+        }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (!list.hidden && activeIndex >= 0) {
+          choose(activeIndex);
+        } else {
+          close();
+          applyTypedGoogleFont(input);
+        }
+      } else if (event.key === 'Escape' && !list.hidden) {
+        event.preventDefault();
+        close();
+      }
+    });
   }
 
   function applyVariable(variable, value) {
@@ -857,6 +1215,63 @@
     return copy;
   }
 
+  function markChanged() {
+    hasUnsavedChanges = Boolean(activeTemplateName);
+  }
+
+  function updateEditorLock() {
+    var isLocked = !activeTemplateName;
+
+    editorSections.forEach(function (section) {
+      section.inert = isLocked;
+      section.classList.toggle('builder-section--locked', isLocked);
+    });
+    if (lockHint) {
+      lockHint.hidden = !isLocked;
+    }
+    if (saveTemplateButton) {
+      saveTemplateButton.textContent = isLocked ? 'Vorlage erstellen' : 'Vorlage speichern';
+    }
+  }
+
+  function showSaveConfirmation(message) {
+    var time = new Date().toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+
+    if (toast && toastText) {
+      toastText.textContent = message + ' (' + time + ')';
+      toast.classList.add('builder-toast--visible');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(function () {
+        toast.classList.remove('builder-toast--visible');
+      }, 3000);
+    }
+
+    if (saveTemplateButton) {
+      saveTemplateButton.textContent = '✓ Gespeichert';
+      saveTemplateButton.classList.add('builder-button--saved');
+      window.clearTimeout(saveFeedbackTimer);
+      saveFeedbackTimer = window.setTimeout(function () {
+        saveTemplateButton.classList.remove('builder-button--saved');
+        updateEditorLock();
+      }, 1800);
+    }
+  }
+
+  function confirmDiscardChanges() {
+    return !hasUnsavedChanges ||
+      window.confirm('Die aktive Vorlage hat ungespeicherte Änderungen. Trotzdem fortfahren?');
+  }
+
+  function resetEditor() {
+    presets = createPresets();
+    activeTheme = 'standard';
+    if (themeSelect) {
+      themeSelect.value = activeTheme;
+    }
+    setTheme(activeTheme);
+    loadPreset(activeTheme);
+  }
+
   function setStatus(message, isError) {
     if (status) {
       status.textContent = message;
@@ -895,7 +1310,11 @@
     });
     updateColorFieldState(theme);
     googleFontInputs.forEach(function (input) {
-      input.value = '';
+      var variable = input.dataset.builderGoogleFont;
+      restoreGoogleFont(
+        input,
+        getFontFamilyFromValue(preset[variable] || defaults[variable])
+      );
     });
     schedulePreviewSync();
   }
@@ -1077,6 +1496,7 @@
     applyVariable(variable, value);
     syncPaletteReferences(variable);
     saveActivePreset();
+    markChanged();
 
     setStatus('Änderungen werden live angezeigt.');
   }
@@ -1150,6 +1570,7 @@
 
     if (!state) {
       refreshTemplateOptions();
+      updateEditorLock();
       return;
     }
 
@@ -1177,6 +1598,7 @@
     setTheme(activeTheme);
     loadPreset(activeTheme);
     refreshTemplateOptions(activeTemplateName);
+    updateEditorLock();
 
     if (state.migrated && writeState()) {
       storage.removeItem(legacyTemplatesKey);
@@ -1229,6 +1651,13 @@
       return;
     }
 
+    var isNewTemplate = !activeTemplateName;
+
+    if (isNewTemplate && templates[name]) {
+      setStatus('Eine Vorlage „' + name + '“ existiert bereits. Bitte laden oder einen anderen Namen wählen.', true);
+      return;
+    }
+
     saveActivePreset();
     templates[name] = {
       activeTheme: activeTheme,
@@ -1237,8 +1666,11 @@
     activeTemplateName = name;
 
     if (writeState()) {
+      hasUnsavedChanges = false;
       refreshTemplateOptions(name);
-      setStatus('Vorlage „' + name + '“ wurde gespeichert.');
+      updateEditorLock();
+      setStatus('Vorlage „' + name + '“ wurde ' + (isNewTemplate ? 'erstellt.' : 'gespeichert.'));
+      showSaveConfirmation('Vorlage „' + name + '“ ' + (isNewTemplate ? 'erstellt und gespeichert' : 'gespeichert'));
     }
   }
 
@@ -1261,7 +1693,9 @@
       templateName.value = name;
     }
     writeState();
+    hasUnsavedChanges = false;
     refreshTemplateOptions(name);
+    updateEditorLock();
     setStatus('Vorlage „' + name + '“ wurde geladen.');
   }
 
@@ -1273,9 +1707,10 @@
     }
 
     var previousActiveTemplateName = activeTemplateName;
+    var isActiveTemplate = activeTemplateName === name;
     delete templates[name];
 
-    if (activeTemplateName === name) {
+    if (isActiveTemplate) {
       activeTemplateName = '';
     }
 
@@ -1290,7 +1725,13 @@
       templateName.value = '';
     }
 
-    refreshTemplateOptions();
+    if (isActiveTemplate) {
+      hasUnsavedChanges = false;
+      resetEditor();
+      updateEditorLock();
+    }
+
+    refreshTemplateOptions(activeTemplateName);
     setStatus('Vorlage „' + name + '“ wurde gelöscht.');
   }
 
@@ -1475,6 +1916,7 @@
 
       applyVariable('background', value);
       saveActivePreset();
+      markChanged();
       setStatus('Änderungen werden live angezeigt.');
     });
   }
@@ -1492,6 +1934,7 @@
       }
       applyVariable(variable, value);
       saveActivePreset();
+      markChanged();
       setStatus('Änderungen werden live angezeigt.');
     });
   });
@@ -1501,22 +1944,13 @@
       if (source.value) {
         applyPaletteSource(source.dataset.builderColorSource, source.value);
         saveActivePreset();
+        markChanged();
       }
       setStatus('Farbpalette wurde angewendet.');
     });
   });
 
-  googleFontButtons.forEach(function (button) {
-    button.addEventListener('click', function () {
-      var input = panel.querySelector(
-        '[data-builder-google-font="' + button.dataset.builderGoogleFontApply + '"]'
-      );
-
-      if (input) {
-        loadGoogleFont(input);
-      }
-    });
-  });
+  googleFontInputs.forEach(setupGoogleFontSearch);
 
   if (themeSelect) {
     themeSelect.addEventListener('change', function () {
@@ -1525,6 +1959,7 @@
       ensureVariantPreset(activeTheme);
       setTheme(themeSelect.value);
       loadPreset(activeTheme);
+      markChanged();
       setStatus('Variante: ' + themeSelect.options[themeSelect.selectedIndex].text);
     });
     setTheme(themeSelect.value);
@@ -1543,6 +1978,9 @@
 
   if (loadTemplateButton) {
     loadTemplateButton.addEventListener('click', function () {
+      if (!confirmDiscardChanges()) {
+        return;
+      }
       loadTemplate(templateSelect ? templateSelect.value : '');
     });
   }
@@ -1587,12 +2025,24 @@
 
   if (importTemplateButton && importFileInput) {
     importTemplateButton.addEventListener('click', function () {
+      if (!confirmDiscardChanges()) {
+        return;
+      }
       importFileInput.click();
     });
     importFileInput.addEventListener('change', function () {
       var file = importFileInput.files && importFileInput.files[0];
       importFileInput.value = '';
       importTemplate(file);
+    });
+  }
+
+  if (!isPreviewFrame) {
+    window.addEventListener('beforeunload', function (event) {
+      if (hasUnsavedChanges) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
     });
   }
 
