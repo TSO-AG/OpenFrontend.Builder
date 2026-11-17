@@ -1127,6 +1127,30 @@ body .builder-panel .builder-color-input:user-invalid {
   border-top: 1px solid var(--bp-border);
 }
 
+.builder-logo-upload {
+  margin-top: 0 !important;
+}
+
+.builder-panel .builder-logo-upload input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  color: var(--bp-muted);
+  font: inherit;
+  font-size: .75rem;
+}
+
+.builder-logo-status {
+  margin: .375rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--bp-muted);
+  font-size: .75rem;
+}
+
+.builder-logo-reset {
+  width: 100%;
+  margin-top: .5rem;
+}
+
 /* Colour palette as compact swatches */
 .builder-palette {
   margin-bottom: .25rem;

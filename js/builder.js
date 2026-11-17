@@ -559,6 +559,13 @@
   var status = panel.querySelector('[data-builder-status]');
   var templateName = panel.querySelector('[data-builder-template-name]');
   var templateSelect = panel.querySelector('[data-builder-template]');
+  var logoInput = panel.querySelector('[data-builder-logo]');
+  var logoStatus = panel.querySelector('[data-builder-logo-status]');
+  var logoResetButton = panel.querySelector('[data-builder-logo-reset]');
+  var logoImages = document.querySelectorAll('.header-brand img');
+  var defaultLogoSrc = logoImages.length ? logoImages[0].getAttribute('src') : '';
+  var logoData = '';
+  var logoName = '';
   var loadTemplateButton = panel.querySelector('[data-builder-load-template]');
   var deleteTemplateButton = panel.querySelector('[data-builder-delete-template]');
   var saveTemplateButton = panel.querySelector('[data-builder-save]');
@@ -612,6 +619,7 @@
   var templateExportFormat = 'openfrontend-builder-template';
   var templateExportVersion = 1;
   var maxImportFileSize = 1024 * 1024;
+  var maxLogoFileSize = 512 * 1024;
   var templates = {};
   var viewportButtons = panel.querySelectorAll('[data-builder-viewport]');
   var previewParam = 'builder-preview';
@@ -1265,6 +1273,7 @@
   function resetEditor() {
     presets = createPresets();
     activeTheme = 'standard';
+    setLogo('', '');
     if (themeSelect) {
       themeSelect.value = activeTheme;
     }
@@ -1341,6 +1350,7 @@
       type: previewMessageType,
       theme: activeTheme,
       values: values,
+      logo: logoData,
       fonts: Array.prototype.map.call(
         document.querySelectorAll('link[id^="builder-google-font-"]'),
         function (link) {
@@ -1471,6 +1481,112 @@
         applyVariable(variable, state.values[variable]);
       }
     });
+    if (typeof state.logo === 'string' &&
+      (!state.logo || /^data:image\/svg\+xml;base64,[A-Za-z0-9+/]+={0,2}$/.test(state.logo))) {
+      logoImages.forEach(function (image) {
+        image.src = state.logo || defaultLogoSrc;
+      });
+    }
+  }
+
+  function setLogo(data, name) {
+    if (data && (typeof data !== 'string' ||
+      data.length > Math.ceil(maxLogoFileSize * 4 / 3) + 64 ||
+      !/^data:image\/svg\+xml;base64,[A-Za-z0-9+/]+={0,2}$/.test(data))) {
+      setStatus('Das gespeicherte SVG-Logo ist ungültig.', true);
+      data = '';
+      name = '';
+    }
+
+    logoData = data || '';
+    logoName = logoData ? (name || 'Eigenes SVG-Logo') : '';
+
+    logoImages.forEach(function (image) {
+      image.src = logoData || defaultLogoSrc;
+    });
+    if (logoStatus) {
+      logoStatus.textContent = logoName || 'Originales Logo';
+    }
+    schedulePreviewSync();
+  }
+
+  function validateSvg(content) {
+    var documentNode = new DOMParser().parseFromString(content, 'image/svg+xml');
+    var svg = documentNode.documentElement;
+    var hasExternalUrl = function (value) {
+      var urls = value.match(/url\(([^)]*)\)/gi) || [];
+
+      return urls.some(function (url) {
+        var reference = url.slice(4, -1).trim().replace(/^['"]|['"]$/g, '');
+        return reference.charAt(0) !== '#';
+      });
+    };
+
+    if (svg.localName !== 'svg' || documentNode.querySelector('parsererror')) {
+      throw new Error('Die Datei enthält kein gültiges SVG.');
+    }
+
+    Array.prototype.forEach.call(documentNode.querySelectorAll('*'), function (element) {
+      if (['script', 'foreignObject'].indexOf(element.localName) !== -1) {
+        throw new Error('Das SVG enthält nicht unterstützte aktive Inhalte.');
+      }
+
+      Array.prototype.forEach.call(element.attributes, function (attribute) {
+        var value = attribute.value.trim();
+
+        if (/^on/i.test(attribute.name)) {
+          throw new Error('Das SVG enthält nicht unterstützte Ereignis-Attribute.');
+        }
+        if (/^(href|xlink:href)$/i.test(attribute.name) && value && value.charAt(0) !== '#') {
+          throw new Error('Das SVG darf keine externen Verweise enthalten.');
+        }
+        if (hasExternalUrl(value)) {
+          throw new Error('Das SVG darf keine externen Ressourcen enthalten.');
+        }
+      });
+    });
+
+    Array.prototype.forEach.call(documentNode.querySelectorAll('style'), function (style) {
+      if (/@import/i.test(style.textContent) || hasExternalUrl(style.textContent)) {
+        throw new Error('Das SVG darf keine externen Ressourcen enthalten.');
+      }
+    });
+  }
+
+  function readLogoFile(file) {
+    if (!file) {
+      return;
+    }
+    if (!/\.svg$/i.test(file.name) || (file.type && file.type !== 'image/svg+xml')) {
+      setStatus('Bitte eine SVG-Datei auswählen.', true);
+      return;
+    }
+    if (file.size > maxLogoFileSize) {
+      setStatus('Das SVG-Logo darf höchstens 512 KB gross sein.', true);
+      return;
+    }
+
+    file.text().then(function (content) {
+      validateSvg(content);
+      var reader = new FileReader();
+      reader.onload = function () {
+        if (typeof reader.result !== 'string' ||
+          !/^data:image\/svg\+xml;base64,[A-Za-z0-9+/]+={0,2}$/.test(reader.result)) {
+          setStatus('Das SVG-Logo konnte nicht gelesen werden.', true);
+          return;
+        }
+
+        setLogo(reader.result, file.name);
+        markChanged();
+        setStatus('Logo „' + file.name + '“ wurde angewendet. Zum dauerhaften Speichern bitte die Vorlage speichern.');
+      };
+      reader.onerror = function () {
+        setStatus('Das SVG-Logo konnte nicht gelesen werden.', true);
+      };
+      reader.readAsDataURL(file);
+    }).catch(function (error) {
+      setStatus(error.message || 'Die SVG-Datei konnte nicht verarbeitet werden.', true);
+    });
   }
 
   function updateVariable(event) {
@@ -1586,6 +1702,12 @@
       presets = clonePresets(activeTemplate.presets);
       activeTheme = presets[activeTemplate.activeTheme] ? activeTemplate.activeTheme : 'standard';
       ensureVariantPreset(activeTheme);
+      setLogo(
+        activeTemplate.logo && activeTemplate.logo.data,
+        activeTemplate.logo && activeTemplate.logo.name
+      );
+    } else {
+      setLogo('', '');
     }
 
     if (templateName) {
@@ -1658,10 +1780,18 @@
       return;
     }
 
+    var hadPreviousTemplate = Object.prototype.hasOwnProperty.call(templates, name);
+    var previousTemplate = templates[name];
+    var previousActiveTemplateName = activeTemplateName;
+
     saveActivePreset();
     templates[name] = {
       activeTheme: activeTheme,
-      presets: clonePresets(presets)
+      presets: clonePresets(presets),
+      logo: {
+        data: logoData,
+        name: logoName
+      }
     };
     activeTemplateName = name;
 
@@ -1671,6 +1801,15 @@
       updateEditorLock();
       setStatus('Vorlage „' + name + '“ wurde ' + (isNewTemplate ? 'erstellt.' : 'gespeichert.'));
       showSaveConfirmation('Vorlage „' + name + '“ ' + (isNewTemplate ? 'erstellt und gespeichert' : 'gespeichert'));
+    } else {
+      if (hadPreviousTemplate) {
+        templates[name] = previousTemplate;
+      } else {
+        delete templates[name];
+      }
+      activeTemplateName = previousActiveTemplateName;
+      refreshTemplateOptions(previousActiveTemplateName);
+      updateEditorLock();
     }
   }
 
@@ -1683,6 +1822,10 @@
 
     saveActivePreset();
     presets = clonePresets(template.presets);
+    setLogo(
+      template.logo && template.logo.data,
+      template.logo && template.logo.name
+    );
     activeTemplateName = name;
     activeTheme = presets[template.activeTheme] ? template.activeTheme : 'standard';
     ensureVariantPreset(activeTheme);
@@ -1759,7 +1902,11 @@
       name: name,
       template: {
         activeTheme: template.activeTheme,
-        presets: clonePresets(template.presets)
+        presets: clonePresets(template.presets),
+        logo: {
+          data: template.logo && template.logo.data ? template.logo.data : '',
+          name: template.logo && template.logo.name ? template.logo.name : ''
+        }
       }
     };
     var blob = new Blob([JSON.stringify(payload, null, 2) + '\n'], {
@@ -1805,6 +1952,28 @@
     if (!isPlainObject(payload.template) || !isPlainObject(payload.template.presets)) {
       throw new Error('Die Vorlagendatei enthält keine gültigen Designwerte.');
     }
+    if (payload.template.logo !== undefined) {
+      if (!isPlainObject(payload.template.logo) ||
+        typeof payload.template.logo.data !== 'string' ||
+        typeof payload.template.logo.name !== 'string' ||
+        (payload.template.logo.data &&
+          !/^data:image\/svg\+xml;base64,[A-Za-z0-9+/]+={0,2}$/.test(payload.template.logo.data)) ||
+        payload.template.logo.data.length > Math.ceil(maxLogoFileSize * 4 / 3) + 64 ||
+        payload.template.logo.name.length > 255) {
+        throw new Error('Die Vorlagendatei enthält kein gültiges SVG-Logo.');
+      }
+      if (payload.template.logo.data) {
+        try {
+          var encodedLogo = payload.template.logo.data.split(',')[1];
+          var logoBytes = Uint8Array.from(atob(encodedLogo), function (character) {
+            return character.charCodeAt(0);
+          });
+          validateSvg(new TextDecoder().decode(logoBytes));
+        } catch (error) {
+          throw new Error(error.message || 'Die Vorlagendatei enthält kein gültiges SVG-Logo.');
+        }
+      }
+    }
 
     var availablePresets = createPresets();
     var allowedVariables = {};
@@ -1847,7 +2016,13 @@
       name: payload.name.trim(),
       template: {
         activeTheme: payload.template.activeTheme,
-        presets: normalizedPresets
+        presets: normalizedPresets,
+        logo: payload.template.logo
+          ? {
+            data: payload.template.logo.data,
+            name: payload.template.logo.name
+          }
+          : { data: '', name: '' }
       }
     };
   }
@@ -2034,6 +2209,21 @@
       var file = importFileInput.files && importFileInput.files[0];
       importFileInput.value = '';
       importTemplate(file);
+    });
+  }
+
+  if (logoInput) {
+    logoInput.addEventListener('change', function () {
+      readLogoFile(logoInput.files && logoInput.files[0]);
+      logoInput.value = '';
+    });
+  }
+
+  if (logoResetButton) {
+    logoResetButton.addEventListener('click', function () {
+      setLogo('', '');
+      markChanged();
+      setStatus('Das originale Header-Logo wurde wiederhergestellt. Zum dauerhaften Speichern bitte die Vorlage speichern.');
     });
   }
 

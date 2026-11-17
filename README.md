@@ -50,6 +50,15 @@ Schriftstärken von Google Fonts geladen. Nicht verfügbare Stärken sind in der
 Auswahl deaktiviert. Ist die Liste nicht erreichbar, wird der eingegebene Name
 mit Enter direkt übernommen.
 
+## Header-Logo
+
+Im Header-Bereich kann ein eigenes SVG-Logo bis 512 KB hochgeladen werden. Es
+ersetzt beide vorhandenen Header-Logo-Varianten und wird in der Desktop- und
+Mobile-Vorschau angezeigt. Das Logo wird zusammen mit der Vorlage gespeichert
+und ist auch im JSON-Export enthalten. **Originales Logo wiederherstellen**
+entfernt das eigene Logo; die Änderung wird mit **Vorlage speichern**
+übernommen.
+
 ## Version
 
 Unten im Builder-Panel wird die aktuelle Version angezeigt. Sie stammt aus dem
